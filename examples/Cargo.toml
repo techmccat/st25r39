@@ -1,0 +1,77 @@
+[package]
+# TODO(1) fix `authors` and `name` if you didn't use `cargo-generate`
+authors = ["techmccat <alessioa02004@gmail.com>"]
+name = "st25r39-examples"
+edition = "2021"
+version = "0.1.0"
+
+[lib]
+harness = false
+
+# needed for each integration test
+[[test]]
+name = "integration"
+harness = false
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+cortex-m-semihosting = "0.5.0"
+embedded-hal = { version = "1.0.0", features = ["defmt-03"] }
+bilge = "0.2.0"
+embedded-hal-bus = { version = "0.1.0", default-features = false, features = ["defmt-03"] }
+
+[dependencies.st25r39]
+path = ".."
+
+[dependencies.stm32g4xx-hal]
+# path = "../stm32g4xx-hal"
+git = "https://github.com/techmccat/stm32g4xx-hal"
+branch = "hal-1"
+# version = "0.0.2"
+features = ["rt", "stm32g474"]
+
+[dev-dependencies]
+defmt-test = "0.3"
+
+# cargo build/run
+[profile.dev]
+codegen-units = 1
+debug = 2
+debug-assertions = true # <-
+incremental = false
+opt-level = 'z'         # <-
+overflow-checks = true  # <-
+
+# cargo test
+[profile.test]
+codegen-units = 1
+debug = 2
+debug-assertions = true # <-
+incremental = false
+opt-level = 3           # <-
+overflow-checks = true  # <-
+
+# cargo build/run --release
+[profile.release]
+codegen-units = 1
+debug = 2
+debug-assertions = false # <-
+incremental = false
+lto = 'thin'
+opt-level = 3            # <-
+overflow-checks = false  # <-
+
+# cargo test --release
+[profile.bench]
+codegen-units = 1
+debug = 2
+debug-assertions = false # <-
+incremental = false
+lto = 'thin'
+opt-level = 3            # <-
+overflow-checks = false  # <-
+
