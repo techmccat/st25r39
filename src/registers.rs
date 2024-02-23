@@ -894,7 +894,7 @@ impl Default for P2PRxConfig {
     }
 }
 
-register_impl!(GPTimer, u16, 0x0B, B);
+register_impl!(GPTimer, u16, 0x13, A);
 /// General purpose timer ticks
 #[bitsize(16)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy)]

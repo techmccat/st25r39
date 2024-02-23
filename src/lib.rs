@@ -3,11 +3,12 @@
 use self::commands::DirectCommand;
 use defmt::Format;
 use embedded_hal::{
-    delay::DelayNs,
     digital::InputPin,
     spi::{Operation, SpiDevice},
 };
 use registers::{Interrupt, Register, RegisterSpace};
+
+pub type GPTDuration = fugit::Duration<u32, 59, 100_000_000>;
 
 pub mod aat;
 pub mod commands;
@@ -240,7 +241,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         registers::InterruptMask::from(mask).write(&mut self.dev)?;
         Ok(())
     }
-    pub fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I::Error> {
+    fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I::Error> {
         let int = u32::from(int);
         defmt::trace!(
             "Waiting for IRQs [{0=0..8:08b} {0=8..16:08b} {0=16..24:08b} {0=24..32:08b}]",
@@ -286,6 +287,27 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         self.enable_interrupts(irq)?;
         self.dev.direct_command(cmd)?;
         self.wait_for_interrupt(irq)?;
+        self.disable_interrupts(irq)
+    }
+
+    /// Delay using the peripheral's general purpose timer
+    pub fn delay(&mut self, d: GPTDuration) -> Result<(), I::Error> {
+        let mut ticks = d.ticks();
+        let mut irq = registers::Interrupt::default();
+        irq.set_gpe(true);
+        self.enable_interrupts(irq)?;
+
+        while ticks > u16::MAX as u32 {
+            registers::GPTimer::from_ticks(u16::MAX).write(&mut self.dev)?;
+            self.dev.direct_command(DirectCommand::StartGPT)?;
+            self.wait_for_interrupt(irq)?;
+
+            ticks -= u16::MAX as u32;
+        }
+        registers::GPTimer::from_ticks(ticks as u16).write(&mut self.dev)?;
+        self.dev.direct_command(DirectCommand::StartGPT)?;
+        self.wait_for_interrupt(irq)?;
+
         self.disable_interrupts(irq)
     }
 
@@ -367,44 +389,40 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     /// Sets the AAT capacitors' DAC output
     pub fn set_aat_capacitance(
         &mut self,
-        // TODO: use peripheral's own timer for the delay
-        mut delay: impl DelayNs,
         a: u8,
         b: u8,
     ) -> Result<(), I::Error> {
         let reg = registers::AntennaTuningControl::new(a, b);
         reg.write(&mut self.dev)?;
         // wait for variable capacitors to adjust
-        Ok(delay.delay_ms(10))
+        self.delay(GPTDuration::millis(10))
     }
 
     /// Sets the AAT capacitors' DAC output and measures the new amplitude and phase
     pub fn set_capacitance_and_measure(
         &mut self,
         // TODO: use peripheral's timer for delay
-        mut delay: impl DelayNs,
         a: u8,
         b: u8,
     ) -> Result<(u8, u8), I::Error> {
-        self.set_aat_capacitance(&mut delay, a, b)?;
+        self.set_aat_capacitance(a, b)?;
 
         let amplitude = self.measure_amplitude_raw()?;
         let phase = self.measure_phase_raw()?;
         Ok((amplitude, phase))
     }
 
-    pub fn tune_antennas<D: DelayNs>(
+    pub fn tune_antennas(
         &mut self,
         config: aat::TunerSettings,
-        mut delay: D,
     ) -> Result<(), I::Error> {
         let mut state = aat::TunerState::new_from_settings(&config, self)?;
         while !state.is_done() {
             let best_dir =
-                aat::find_best_step(self, &mut delay, &mut state, &config /*, prev_dir*/)?;
+                aat::find_best_step(self, &mut state, &config /*, prev_dir*/)?;
 
             if let Some(d) = best_dir {
-                while aat::try_greedy_step(self, &mut delay, &mut state, &config, d)? {}
+                while aat::try_greedy_step(self, &mut state, &config, d)? {}
             }
 
             state.halve_steps();

@@ -1,6 +1,6 @@
 use core::ops::RangeInclusive;
 
-use embedded_hal::{delay::DelayNs, digital::InputPin};
+use embedded_hal::digital::InputPin;
 
 use crate::{
     registers::{self, Register},
@@ -149,7 +149,6 @@ fn step_values(state: &TunerState, conf: &TunerSettings, dir: Direction) -> (u8,
 
 pub(crate) fn find_best_step<I: Interface, P: InputPin>(
     driver: &mut crate::ST25R3916<I, P>,
-    mut delay: impl DelayNs,
     state: &mut TunerState,
     settings: &TunerSettings,
     /*previous: Option<Direction>,*/
@@ -161,7 +160,7 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
         // };
 
         let (new_a, new_b) = step_values(state, settings, d);
-        let (amp, phase) = driver.set_capacitance_and_measure(&mut delay, new_a, new_b)?;
+        let (amp, phase) = driver.set_capacitance_and_measure(new_a, new_b)?;
 
         let diff = compute_diff(settings, amp, phase);
         if diff < state.diff {
@@ -181,19 +180,18 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
         }
     }
 
-    driver.set_aat_capacitance(&mut delay, state.a, state.b)?;
+    driver.set_aat_capacitance(state.a, state.b)?;
     Ok(lastdir)
 }
 
 pub(crate) fn try_greedy_step<I: Interface, P: InputPin>(
     driver: &mut crate::ST25R3916<I, P>,
-    mut delay: impl DelayNs,
     state: &mut TunerState,
     settings: &TunerSettings,
     dir: Direction,
 ) -> Result<bool, I::Error> {
     let (new_a, new_b) = step_values(&state, &settings, dir);
-    let (amp, phase) = driver.set_capacitance_and_measure(&mut delay, new_a, new_a)?;
+    let (amp, phase) = driver.set_capacitance_and_measure(new_a, new_b)?;
     let diff = compute_diff(&settings, amp, phase);
     Ok(if diff < state.diff {
         state.a = new_a;
@@ -201,7 +199,7 @@ pub(crate) fn try_greedy_step<I: Interface, P: InputPin>(
         state.diff = diff;
         true
     } else {
-        driver.set_aat_capacitance(&mut delay, state.a, state.b)?;
+        driver.set_aat_capacitance(state.a, state.b)?;
         false
     })
 }
