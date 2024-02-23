@@ -36,7 +36,6 @@ fn main() -> ! {
     let spi_bus = dp
         .SPI1
         .spi((sck, miso, mosi), spi::MODE_1, 400.kHz(), &mut rcc);
-    defmt::info!("SPI init done");
     let interface = SpiInterface::new(ExclusiveDevice::new(spi_bus, cs, NoDelay));
 
     let mut driver = ST25R3916::init(interface, irq).unwrap();
@@ -45,18 +44,21 @@ fn main() -> ! {
 
     let amplitude = driver.measure_amplitude_raw().unwrap();
     let phase = driver.measure_phase().unwrap();
-    defmt::info!("Before AAT: amplitude: {=u8}, phase: {}", amplitude, phase);
+    defmt::warn!("Before AAT: amplitude: {=u8}, phase: {}", amplitude, phase);
 
-    let mut settings = st25r39::aat::TunerSettings::default();
-    settings.a_step = 64;
-    settings.b_step = 64;
+    let settings = st25r39::aat::TunerSettings::default();
+    defmt::info!("{:#?}", settings);
+
     driver
         .tune_antennas(settings)
         .unwrap();
 
     let amplitude = driver.measure_amplitude_raw().unwrap();
     let phase = driver.measure_phase().unwrap();
-    defmt::info!("After AAT: amplitude: {=u8}, phase: {}", amplitude, phase);
+    defmt::warn!("After AAT: amplitude: {=u8}, phase: {}", amplitude, phase);
+
+    defmt::info!("Resetting DAC values for the next run");
+    driver.set_aat_capacitance(0x80, 0x80).unwrap();
 
     st25r39_examples::exit()
 }

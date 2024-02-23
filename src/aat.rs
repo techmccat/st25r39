@@ -7,13 +7,12 @@ use crate::{
     Interface,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, defmt::Format)]
 pub struct TunerSettings {
     pub amplitude_target: u8,
     pub amplitude_weight: u8,
     pub phase_target: u8,
     pub phase_weight: u8,
-    pub max_tries: u8,
     pub a_start: Option<u8>,
     pub a_range: RangeInclusive<u8>,
     pub a_step: u8,
@@ -29,7 +28,6 @@ impl Default for TunerSettings {
             amplitude_weight: 1,
             phase_target: 128,
             phase_weight: 2,
-            max_tries: 32,
             a_start: None,
             a_range: 0..=255,
             a_step: 32,
@@ -66,7 +64,7 @@ const DIRECTIONS: [Direction; 4] = [
     Direction::DownB,
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, defmt::Format)]
 pub(crate) struct TunerState {
     pub a: u8,
     pub b: u8,
@@ -86,17 +84,21 @@ impl TunerState {
         } else {
             (None, None)
         };
-        Ok(Self {
+        let amp = driver.measure_amplitude_raw()?;
+        let phase = driver.measure_phase_raw()?;
+        let ret = Self {
             a: conf.a_start.unwrap_or(a.unwrap()),
             b: conf.b_start.unwrap_or(b.unwrap()),
             step_a: conf.a_step,
             step_b: conf.b_step,
             diff: compute_diff(
                 conf,
-                driver.measure_amplitude_raw()?,
-                driver.measure_phase_raw()?,
+                amp,
+                phase
             ),
-        })
+        };
+        defmt::debug!("New state: {:?}, amp={=u8}, phase={=u8}", ret, amp, phase);
+        Ok(ret)
     }
     pub fn is_done(&self) -> bool {
         self.step_a == 0 || self.step_b == 0
@@ -104,7 +106,7 @@ impl TunerState {
     pub fn halve_steps(&mut self) {
         self.step_a /= 2;
         self.step_b /= 2;
-        defmt::debug!("Step values: a={=u8}, b={=u8}", self.step_a, self.step_b);
+        defmt::trace!("Step values: a={=u8}, b={=u8}", self.step_a, self.step_b);
     }
 }
 
@@ -154,7 +156,9 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
     /*previous: Option<Direction>,*/
 ) -> Result<Option<Direction>, I::Error> {
     let mut lastdir = None;
+    let mut skip_apply = false;
     for d in DIRECTIONS {
+        skip_apply = false;
         // if Some(d) == previous.map(|d| d.opposite()) {
         //     continue;
         // };
@@ -164,8 +168,11 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
 
         let diff = compute_diff(settings, amp, phase);
         if diff < state.diff {
+            // gets overwritten if the loop runs again
+            // true only if the last run got the best result
+            skip_apply = true;
             defmt::debug!(
-                "{}, a={=u8} b={=u8}, amp={=u8} phase={=u8}, diff={=u16}",
+                "Best yet: {}, a={=u8} b={=u8}, amp={=u8} phase={=u8}, diff={=u16}",
                 d,
                 new_a,
                 new_b,
@@ -180,7 +187,10 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
         }
     }
 
-    driver.set_aat_capacitance(state.a, state.b)?;
+    // saves a little over 10ms per step on best case
+    if !skip_apply {
+        driver.set_aat_capacitance(state.a, state.b)?;
+    }
     Ok(lastdir)
 }
 
@@ -194,6 +204,15 @@ pub(crate) fn try_greedy_step<I: Interface, P: InputPin>(
     let (amp, phase) = driver.set_capacitance_and_measure(new_a, new_b)?;
     let diff = compute_diff(&settings, amp, phase);
     Ok(if diff < state.diff {
+        defmt::debug!(
+            "Kept dir: {}, a={=u8} b={=u8}, amp={=u8} phase={=u8}, diff={=u16}",
+            dir,
+            new_a,
+            new_b,
+            amp,
+            phase,
+            diff
+        );
         state.a = new_a;
         state.b = new_b;
         state.diff = diff;

@@ -14,3 +14,13 @@ embedded-hal 1.0 SPI and digital interfaces
 ### init.rs
 
 Starts the ST25 oscillator, measures the voltage on the VDD rail and configures the regulator accordingly
+
+### tuning.rs
+
+Shows off the automatic antenna tuning (AAT) feature of the ST25R3916B
+
+Place a piece of metal or a NFC card near the antenna to see how the numbers magically worsen
+
+### blinky.rs
+
+Demonstrates using the peripheral's general purpose timer as a delay provider

@@ -161,8 +161,8 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     /// Run a function with access to the interface
     ///
     /// Can be used to reclock after initialization
-    pub fn with_interface(&mut self, f: impl FnOnce(&mut I)) {
-        f(&mut self.dev);
+    pub fn borrow_interface(&mut self) -> &mut I {
+        &mut self.dev
     }
 
     /// Takes ownership of the interface and initializes the device
@@ -376,7 +376,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         Ok(amplitude)
     }
 
-    fn measure_phase_raw(&mut self) -> Result<u8, I::Error> {
+    pub fn measure_phase_raw(&mut self) -> Result<u8, I::Error> {
         self.command_and_wait(DirectCommand::MeasurePhase)?;
         registers::ADConverterOutput::read(&mut self.dev).map(|r| r.value())
     }
@@ -416,6 +416,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         &mut self,
         config: aat::TunerSettings,
     ) -> Result<(), I::Error> {
+        registers::IoConfiguration::modify(&mut self.dev, |r| r.set_aat_en(true))?;
         let mut state = aat::TunerState::new_from_settings(&config, self)?;
         while !state.is_done() {
             let best_dir =
@@ -445,7 +446,8 @@ impl PhaseDifference {
         match raw {
             0 => Self::Above163,
             255 => Self::Below17,
-            _ => Self::Measured(17 + ((1.0 - raw as f32 / 255.0) * 146.0) as u8),
+            // for some reason f32.round() is not compiling so we add 0.5 and truncate
+            _ => Self::Measured(17 + ((1.0 - raw as f32 / 255.0) * 146.0 + 0.5) as u8),
         }
     }
 }
