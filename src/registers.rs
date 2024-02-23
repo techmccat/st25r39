@@ -36,17 +36,12 @@ pub mod helper_traits {
 pub trait Register: Sized + FromLeBytes + ToLeBytes {
     const ADDRESS: u8;
     const SPACE: RegisterSpace;
-    fn read<I: super::Interface>(
-        iface: &mut I,
-    ) -> Result<Self, I::Error> {
+    fn read<I: super::Interface>(iface: &mut I) -> Result<Self, I::Error> {
         let mut buf = Self::ByteArray::default();
         iface.register_read(Self::ADDRESS, Self::SPACE, &mut buf.as_mut())?;
         Ok(Self::from_le_bytes(buf))
     }
-    fn write<I: super::Interface>(
-        self,
-        iface: &mut I,
-    ) -> Result<(), I::Error> {
+    fn write<I: super::Interface>(self, iface: &mut I) -> Result<(), I::Error> {
         iface.register_write(Self::ADDRESS, Self::SPACE, self.to_le_bytes().as_ref())
     }
     fn modify<I: super::Interface>(
@@ -68,7 +63,7 @@ macro_rules! register_impl {
         impl FromLeBytes for $type {
             fn from_le_bytes(bytes: Self::ByteArray) -> Self {
                 Self {
-                    value: <$inner>::from_le_bytes(bytes)
+                    value: <$inner>::from_le_bytes(bytes),
                 }
             }
         }
@@ -899,6 +894,25 @@ impl Default for P2PRxConfig {
     }
 }
 
+register_impl!(GPTimer, u16, 0x0B, B);
+/// General purpose timer ticks
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+pub struct GPTimer {
+    pub msb: u8,
+    pub lsb: u8
+}
+impl GPTimer {
+    pub fn from_ticks(ticks: u16) -> Self {
+        let msb = ticks >> 8;
+        let lsb = ticks & 0xFF;
+        Self::new(msb as u8, lsb as u8)
+    }
+    pub fn to_ticks(self) -> u16 {
+        ((self.msb() as u16) << 8) + self.lsb() as u16
+    }
+}
+
 register_impl!(InterruptRegister, u32, 0x1A, A);
 /// Interrupt registers
 #[bitsize(32)]
@@ -1020,14 +1034,15 @@ pub mod regulator_control {
         VddAM = 0b100,
         VddTX = 0b101,
         #[fallback]
-        Reserved
+        Reserved,
     }
 
     #[bitsize(1)]
     #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
     pub enum RegulatedSettingSource {
         /// Regulated voltages come from the Adjust Regulators command
-        #[default] AdjustRegulators = 0,
+        #[default]
+        AdjustRegulators = 0,
         /// Regulated voltages come from [`RegulatorControl`].rege
         ExternalRegister = 1,
     }
@@ -1065,7 +1080,53 @@ register_impl!(ADConverterOutput, u8, 0x25, A);
 #[bitsize(8)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
 pub struct ADConverterOutput {
-    pub value: u8
+    pub value: u8,
+}
+
+register_impl!(AntennaTuningControl, u16, 0x26, A);
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+pub struct AntennaTuningControl {
+    pub a: u8,
+    pub b: u8,
+}
+impl Default for AntennaTuningControl {
+    fn default() -> Self {
+        Self::new(1 << 7, 1 << 7)
+    }
+}
+
+register_impl!(AuxiliaryModulationSetting, u8, 0x28, B);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct AuxiliaryModulationSetting {
+    reserved: u2,
+    /// Regulator shaped AM modulation enable
+    ///
+    /// Set to
+    /// - true: When it is used with act_amsink=0 and small VDD_AM capacitor (10-50 nF)
+    /// - false: In card mode, wake-up mode and measure amplitude/phase from tx_en=0
+    pub regulator_am: bool,
+    /// Resistive AM modulation enable
+    ///
+    /// Uses md_res<6:0> to configure resistive AM modulated driver resistance
+    pub resistive_am: bool,
+    /// Driver load modulation enable
+    ///
+    /// Uses Passive target modulation register to set driver load modulation resistance.
+    pub lm_driver: bool,
+    /// External load modulation enable
+    ///
+    /// Enables output of load modulation signal on LM_EXT pin.
+    pub lm_external: bool,
+    /// true for inverted polarity (LM_EXT active low)
+    pub lm_external_polarity: bool,
+    /// Disables AM regulator
+    ///
+    /// Set to:
+    /// - true: with act_amsink=0 and small VDD_AM capacitor (10-50nF, depending on RF load)
+    /// - false: act_amsink=1 and big VDD_AM capacitor (2.2uF)
+    pub disable_am_regulator: bool,
 }
 
 register_impl!(IcIdentity, u8, 0x3F, A);

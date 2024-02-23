@@ -1,12 +1,15 @@
 #![no_std]
 
 use self::commands::DirectCommand;
+use defmt::Format;
 use embedded_hal::{
+    delay::DelayNs,
     digital::InputPin,
     spi::{Operation, SpiDevice},
 };
-use registers::{Register, RegisterSpace};
+use registers::{Interrupt, Register, RegisterSpace};
 
+pub mod aat;
 pub mod commands;
 pub mod registers;
 
@@ -215,11 +218,6 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         &mut self,
         source: registers::regulator_control::MeasureSource,
     ) -> Result<u16, I::Error> {
-        // enable direct command interrupt
-        let mut irq = registers::Interrupt::default();
-        irq.set_dct(true);
-        self.enable_interrupts(irq)?;
-
         registers::RegulatorControl::modify(&mut self.dev, |r| r.set_mpsv(source))?;
         self.command_and_wait(DirectCommand::MeasurePowerSupply)?;
 
@@ -230,19 +228,19 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         Ok(mv)
     }
 
-    fn enable_interrupts(&mut self, int: registers::Interrupt) -> Result<(), I::Error> {
+    fn enable_interrupts(&mut self, int: Interrupt) -> Result<(), I::Error> {
         let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)?.into();
         mask &= !(u32::from(int));
         registers::InterruptMask::from(mask).write(&mut self.dev)?;
         Ok(())
     }
-    fn disable_interrupts(&mut self, int: registers::Interrupt) -> Result<(), I::Error> {
+    fn disable_interrupts(&mut self, int: Interrupt) -> Result<(), I::Error> {
         let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)?.into();
         mask |= u32::from(int);
         registers::InterruptMask::from(mask).write(&mut self.dev)?;
         Ok(())
     }
-    pub fn wait_for_interrupt(&mut self, int: registers::Interrupt) -> Result<(), I::Error> {
+    pub fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I::Error> {
         let int = u32::from(int);
         defmt::trace!(
             "Waiting for IRQs [{0=0..8:08b} {0=8..16:08b} {0=16..24:08b} {0=24..32:08b}]",
@@ -270,7 +268,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             // clear interrupts
             let _ = registers::InterruptRegister::read(&mut self.dev)?;
 
-            let mut int = registers::Interrupt::default();
+            let mut int = Interrupt::default();
             int.set_osc(true);
 
             self.enable_interrupts(int)?;
@@ -283,7 +281,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     }
 
     fn command_and_wait(&mut self, cmd: DirectCommand) -> Result<(), I::Error> {
-        let mut irq = registers::Interrupt::default();
+        let mut irq = Interrupt::default();
         irq.set_dct(true);
         self.enable_interrupts(irq)?;
         self.dev.direct_command(cmd)?;
@@ -307,5 +305,129 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         };
 
         Ok(base_voltage + 100 * regulator_output.value() as u16)
+    }
+
+    /// Measures the signal amplitude on the RFI pins
+    ///
+    /// The amplitude detector conversion gain is 0.6 VinPP / Vout referenced to the RF signal
+    /// on a single RFI pin.  
+    /// Thus, one LSB of the A/D converter output represents 13.02 mVPP on either of the RFI inputs.
+    pub fn measure_amplitude_raw(&mut self) -> Result<u8, I::Error> {
+        use registers::{mode_definition, operation_control, receiver_configuration};
+
+        // save registers
+        let op_bak = registers::OperationControl::read(&mut self.dev)?;
+        let mode_bak = registers::ModeDefinition::read(&mut self.dev)?;
+        let rx_conf_bak = registers::ReceiverConfiguration::read(&mut self.dev)?;
+        let aux_bak = registers::AuxiliaryModulationSetting::read(&mut self.dev)?;
+
+        // disable bits that influence the receiver chain
+        let mut op_new = op_bak;
+        op_new.set_rx_chn(operation_control::RxChanEnable::Both);
+        let mut mode_new = registers::ModeDefinition::default();
+        mode_new.set_om(mode_definition::OperationMode::InitiatorIso14443A);
+        mode_new.set_tr_am(mode_definition::ModulationMode::OOK);
+        mode_new.set_nfc_ar(mode_definition::NfcAutomaticResponse::Off);
+        let mut rx_conf_new = rx_conf_bak;
+        rx_conf_new.set_ch_sel(receiver_configuration::ChannelSelect::ChannelAM);
+        rx_conf_new.set_demod_mode(receiver_configuration::DemodulationMode::AMPM);
+        rx_conf_new.set_amd_sel(receiver_configuration::AMDemodulatorSelect::PeakDetector);
+        // TODO: feature gate to st25r3916b (rfal has an ifdef)
+        // disable active wave shaping for amplitude measurement
+        let mut aux_new = aux_bak;
+        aux_new.set_regulator_am(false);
+
+        op_new.write(&mut self.dev)?;
+        mode_new.write(&mut self.dev)?;
+        rx_conf_new.write(&mut self.dev)?;
+        aux_new.write(&mut self.dev)?;
+
+        self.command_and_wait(DirectCommand::MeasureAmplitude)?;
+        let amplitude = registers::ADConverterOutput::read(&mut self.dev)?.value();
+
+        // restore registers
+        op_bak.write(&mut self.dev)?;
+        mode_bak.write(&mut self.dev)?;
+        rx_conf_bak.write(&mut self.dev)?;
+        aux_bak.write(&mut self.dev)?;
+
+        Ok(amplitude)
+    }
+
+    fn measure_phase_raw(&mut self) -> Result<u8, I::Error> {
+        self.command_and_wait(DirectCommand::MeasurePhase)?;
+        registers::ADConverterOutput::read(&mut self.dev).map(|r| r.value())
+    }
+
+    /// Measures the phase difference between the RFO (output) and RFI (input) signals
+    pub fn measure_phase(&mut self) -> Result<PhaseDifference, I::Error> {
+        self.measure_phase_raw().map(PhaseDifference::from_raw)
+    }
+
+    /// Sets the AAT capacitors' DAC output
+    pub fn set_aat_capacitance(
+        &mut self,
+        // TODO: use peripheral's own timer for the delay
+        mut delay: impl DelayNs,
+        a: u8,
+        b: u8,
+    ) -> Result<(), I::Error> {
+        let reg = registers::AntennaTuningControl::new(a, b);
+        reg.write(&mut self.dev)?;
+        // wait for variable capacitors to adjust
+        Ok(delay.delay_ms(10))
+    }
+
+    /// Sets the AAT capacitors' DAC output and measures the new amplitude and phase
+    pub fn set_capacitance_and_measure(
+        &mut self,
+        // TODO: use peripheral's timer for delay
+        mut delay: impl DelayNs,
+        a: u8,
+        b: u8,
+    ) -> Result<(u8, u8), I::Error> {
+        self.set_aat_capacitance(&mut delay, a, b)?;
+
+        let amplitude = self.measure_amplitude_raw()?;
+        let phase = self.measure_phase_raw()?;
+        Ok((amplitude, phase))
+    }
+
+    pub fn tune_antennas<D: DelayNs>(
+        &mut self,
+        config: aat::TunerSettings,
+        mut delay: D,
+    ) -> Result<(), I::Error> {
+        let mut state = aat::TunerState::new_from_settings(&config, self)?;
+        while !state.is_done() {
+            let best_dir =
+                aat::find_best_step(self, &mut delay, &mut state, &config /*, prev_dir*/)?;
+
+            if let Some(d) = best_dir {
+                while aat::try_greedy_step(self, &mut delay, &mut state, &config, d)? {}
+            }
+
+            state.halve_steps();
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Format)]
+pub enum PhaseDifference {
+    /// Between or equal to 0° and 17°
+    Below17,
+    Measured(u8),
+    /// Between or equal to 163° and 180°
+    Above163,
+}
+
+impl PhaseDifference {
+    pub fn from_raw(raw: u8) -> Self {
+        match raw {
+            0 => Self::Above163,
+            255 => Self::Below17,
+            _ => Self::Measured(17 + ((1.0 - raw as f32 / 255.0) * 146.0) as u8),
+        }
     }
 }
