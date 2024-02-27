@@ -5,6 +5,7 @@ use embedded_hal::digital::InputPin;
 use crate::{
     registers::{self, Register},
     Interface,
+    Error,
 };
 
 #[derive(Clone, Debug, defmt::Format)]
@@ -77,9 +78,9 @@ impl TunerState {
     pub fn new_from_settings<I: Interface, P: InputPin>(
         conf: &TunerSettings,
         driver: &mut crate::ST25R3916<I, P>,
-    ) -> Result<Self, I::Error> {
+    ) -> crate::Result<Self, I, P> {
         let (a, b) = if conf.a_start.is_none() || conf.b_start.is_none() {
-            let reg = registers::AntennaTuningControl::read(&mut driver.dev)?;
+            let reg = registers::AntennaTuningControl::read(&mut driver.dev).map_err(Error::Interface)?;
             (Some(reg.a()), Some(reg.b()))
         } else {
             (None, None)
@@ -154,7 +155,7 @@ pub(crate) fn find_best_step<I: Interface, P: InputPin>(
     state: &mut TunerState,
     settings: &TunerSettings,
     /*previous: Option<Direction>,*/
-) -> Result<Option<Direction>, I::Error> {
+) -> crate::Result<Option<Direction>, I, P> {
     let mut lastdir = None;
     let mut skip_apply = false;
     for d in DIRECTIONS {
@@ -199,7 +200,7 @@ pub(crate) fn try_greedy_step<I: Interface, P: InputPin>(
     state: &mut TunerState,
     settings: &TunerSettings,
     dir: Direction,
-) -> Result<bool, I::Error> {
+) -> crate::Result<bool, I, P> {
     let (new_a, new_b) = step_values(&state, &settings, dir);
     let (amp, phase) = driver.set_capacitance_and_measure(new_a, new_b)?;
     let diff = compute_diff(&settings, amp, phase);

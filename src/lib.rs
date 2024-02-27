@@ -1,156 +1,24 @@
 #![no_std]
 
-use self::commands::DirectCommand;
 use defmt::Format;
-use embedded_hal::{
-    digital::InputPin,
-    spi::{Operation, SpiDevice},
-};
-use registers::{Interrupt, Register, RegisterSpace};
+use commands::DirectCommand;
+use embedded_hal::digital::InputPin;
+use registers::{Interrupt, Register};
+use interface::Interface;
 
 pub type GPTDuration = fugit::Duration<u32, 59, 100_000_000>;
 
 pub mod aat;
 pub mod commands;
+pub mod interface;
 pub mod registers;
 
-pub trait Interface: Sized {
-    type Error;
-    /// Write one or more registers
-    fn register_write(
-        &mut self,
-        addr: u8,
-        space: RegisterSpace,
-        buf: &[u8],
-    ) -> Result<(), Self::Error>;
-    /// Read one or more registers
-    fn register_read(
-        &mut self,
-        addr: u8,
-        space: RegisterSpace,
-        buf: &mut [u8],
-    ) -> Result<(), Self::Error>;
-    /// Write to the FIFO
-    fn fifo_write(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-    /// Read from the FIFO
-    fn fifo_read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error>;
-    /// Write to passive target memory, addresses 0..48
-    fn pt_memory_load_a_config(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-    /// Write to passive target memory, address 15..48
-    fn pt_memory_load_f_config(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-    /// Write to passive target memory, address 36..48
-    ///
-    /// Allows reloading the TSN random numbers without overwriting previous memory
-    fn pt_memory_load_tsn_data(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-    /// Read passive target memory
-    fn pt_memory_read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error>;
-    fn direct_command(&mut self, cmd: DirectCommand) -> Result<(), Self::Error>;
+pub enum Error<I: Interface, P: InputPin> {
+    Interface(I::Error),
+    GPIO(P::Error),
 }
 
-pub mod spi_modes {
-    /// Lower 6 bits set to the register address
-    pub const REG_WRITE: u8 = 0b00 << 6;
-    /// Lower 6 bits set to the register address
-    pub const REG_READ: u8 = 0b01 << 6;
-    pub const FIFO_LOAD: u8 = 0b10 << 6;
-    pub const PT_MEM_LOAD_A_CFG: u8 = 0b1010_0000;
-    pub const PT_MEM_LOAD_F_CFG: u8 = 0b1010_1000;
-    pub const PT_MEM_LOAD_TSN_DATA: u8 = 0b1010_1100;
-    pub const PT_MEM_READ: u8 = 0b1011_1111;
-    pub const FIFO_READ: u8 = 0b1001_1111;
-    pub const DIRECT_COMMAND: u8 = 0b11 << 6;
-}
-
-pub struct SpiInterface<S: SpiDevice> {
-    dev: S,
-}
-
-impl<S: SpiDevice> Interface for SpiInterface<S> {
-    type Error = S::Error;
-
-    fn register_write(
-        &mut self,
-        addr: u8,
-        space: RegisterSpace,
-        buf: &[u8],
-    ) -> Result<(), Self::Error> {
-        defmt::trace!("Register {=u8:X}, write {=[u8]:b}", addr, buf);
-        self.dev.transaction(&mut [
-            Operation::Write(space.prefix()),
-            Operation::Write(&[spi_modes::REG_WRITE | (addr & 0b111111)]),
-            Operation::Write(buf),
-        ])
-    }
-
-    fn register_read(
-        &mut self,
-        addr: u8,
-        space: RegisterSpace,
-        buf: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        self.dev.transaction(&mut [
-            Operation::Write(space.prefix()),
-            Operation::Write(&[spi_modes::REG_READ | (addr & 0b111111)]),
-            Operation::Read(buf),
-        ])?;
-        defmt::trace!("Register {=u8:X}, read {=[u8]:b}", addr, buf);
-        Ok(())
-    }
-
-    fn fifo_write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        assert!(buf.len() > 0 && buf.len() <= 512);
-        self.dev.transaction(&mut [
-            Operation::Write(&[spi_modes::FIFO_LOAD]),
-            Operation::Write(buf),
-        ])
-    }
-
-    fn fifo_read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.dev.transfer(buf, &[spi_modes::FIFO_READ])
-    }
-
-    fn direct_command(&mut self, cmd: DirectCommand) -> Result<(), Self::Error> {
-        defmt::trace!("Direct command {} ({=u8:#X})", cmd, cmd as u8);
-        self.dev
-            .write(&[spi_modes::DIRECT_COMMAND | (cmd as u8 & 0b111111)])
-    }
-
-    fn pt_memory_load_a_config(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.dev.transaction(&mut [
-            Operation::Write(&[spi_modes::PT_MEM_LOAD_A_CFG]),
-            Operation::Write(buf.get(..48).unwrap_or(buf)),
-        ])
-    }
-    fn pt_memory_load_f_config(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.dev.transaction(&mut [
-            Operation::Write(&[spi_modes::PT_MEM_LOAD_F_CFG]),
-            Operation::Write(buf.get(..48 - 15).unwrap_or(buf)),
-        ])
-    }
-    fn pt_memory_load_tsn_data(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.dev.transaction(&mut [
-            Operation::Write(&[spi_modes::PT_MEM_LOAD_TSN_DATA]),
-            Operation::Write(buf.get(..48 - 36).unwrap_or(buf)),
-        ])
-    }
-    fn pt_memory_read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
-        let clipped_buf = if let Some(b) = buf.get_mut(..48) {
-            b
-        } else {
-            buf
-        };
-        self.dev.transaction(&mut [
-            Operation::Write(&[spi_modes::PT_MEM_LOAD_TSN_DATA]),
-            Operation::Read(clipped_buf),
-        ])
-    }
-}
-
-impl<S: SpiDevice> SpiInterface<S> {
-    pub fn new(dev: S) -> Self {
-        Self { dev }
-    }
-}
+pub type Result<T, I, P> = core::result::Result<T, Error<I, P>>;
 
 pub struct ST25R3916<I: Interface, P: InputPin> {
     dev: I,
@@ -166,10 +34,10 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     }
 
     /// Takes ownership of the interface and initializes the device
-    pub fn init(dev: I, irq: P) -> Result<Self, I::Error> {
+    pub fn init(dev: I, irq: P) -> Result<Self, I, P> {
         let mut drv = Self { dev, irq };
         // set default state
-        drv.dev.direct_command(DirectCommand::SetDefault)?;
+        drv.dev.direct_command(DirectCommand::SetDefault).map_err(Error::Interface)?;
         let mut io_cfg = registers::IoConfiguration::default();
         // TODO: decouple this into the interface, we'll want I2C support in the future
         // increase MISO driving level for higher SPI clock
@@ -178,11 +46,11 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         io_cfg.set_miso_pd1(true);
         io_cfg.set_miso_pd2(true);
         io_cfg.set_out_cl(registers::io_configuration::OutClk::Disabled);
-        io_cfg.write(&mut drv.dev)?;
+        io_cfg.write(&mut drv.dev).map_err(Error::Interface)?;
         // let io_cfg = registers::IoConfiguration::read::<_, u16>(&mut drv.dev)?;
         // defmt::debug!("IO Configuration: {}", io_cfg);
 
-        let identity: u8 = registers::IcIdentity::read(&mut drv.dev)?.into();
+        let identity: u8 = registers::IcIdentity::read(&mut drv.dev).map_err(Error::Interface)?.into();
         defmt::info!("IC type {0=0..3}, revision {0=3..8}", identity);
 
         drv.enable_oscillator()?;
@@ -191,16 +59,16 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         let vdd = drv.measure_voltage(registers::regulator_control::MeasureSource::Vdd)?;
         defmt::info!("Measured voltage: {=u16}mV", vdd);
         // set power supply level
-        registers::IoConfiguration::modify(&mut drv.dev, |r| r.set_sup3v(vdd < 3600))?;
+        registers::IoConfiguration::modify(&mut drv.dev, |r| r.set_sup3v(vdd < 3600)).map_err(Error::Interface)?;
         // disable tx/rx
         registers::OperationControl::modify(&mut drv.dev, |reg| {
             reg.set_tx_en(false);
             reg.set_rx_en(false);
-        })?;
+        }).map_err(Error::Interface)?;
         // disable interrupts
         drv.disable_interrupts(u32::MAX.into())?;
         // clear interrupts
-        registers::InterruptRegister::read(&mut drv.dev)?;
+        registers::InterruptRegister::read(&mut drv.dev).map_err(Error::Interface)?;
         Ok(drv)
     }
 
@@ -210,49 +78,48 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     pub fn set_clock_out(
         &mut self,
         setting: registers::io_configuration::OutClk,
-    ) -> Result<(), I::Error> {
-        registers::IoConfiguration::modify(&mut self.dev, |reg| reg.set_out_cl(setting))
+    ) -> Result<(), I, P> {
+        registers::IoConfiguration::modify(&mut self.dev, |reg| reg.set_out_cl(setting)).map_err(Error::Interface)
     }
 
     /// Measures requested voltage in millivolts
     fn measure_voltage(
         &mut self,
         source: registers::regulator_control::MeasureSource,
-    ) -> Result<u16, I::Error> {
-        registers::RegulatorControl::modify(&mut self.dev, |r| r.set_mpsv(source))?;
+    ) -> Result<u16, I, P> {
+        registers::RegulatorControl::modify(&mut self.dev, |r| r.set_mpsv(source)).map_err(Error::Interface)?;
         self.command_and_wait(DirectCommand::MeasurePowerSupply)?;
 
-        let raw = registers::ADConverterOutput::read(&mut self.dev)?.value() as u16;
+        let raw = registers::ADConverterOutput::read(&mut self.dev).map_err(Error::Interface)?.value() as u16;
         // copied from the arduino library, each step is supposedly 23.4mV
         let mv = raw * 23 + ((raw * 4) + 5) / 10;
 
         Ok(mv)
     }
 
-    fn enable_interrupts(&mut self, int: Interrupt) -> Result<(), I::Error> {
-        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)?.into();
+    fn enable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
+        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev).map_err(Error::Interface)?.into();
         mask &= !(u32::from(int));
-        registers::InterruptMask::from(mask).write(&mut self.dev)?;
+        registers::InterruptMask::from(mask).write(&mut self.dev).map_err(Error::Interface)?;
         Ok(())
     }
-    fn disable_interrupts(&mut self, int: Interrupt) -> Result<(), I::Error> {
-        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)?.into();
+    fn disable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
+        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev).map_err(Error::Interface)?.into();
         mask |= u32::from(int);
-        registers::InterruptMask::from(mask).write(&mut self.dev)?;
+        registers::InterruptMask::from(mask).write(&mut self.dev).map_err(Error::Interface)?;
         Ok(())
     }
-    fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I::Error> {
+    fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I, P> {
         let int = u32::from(int);
         defmt::trace!(
             "Waiting for IRQs [{0=0..8:08b} {0=8..16:08b} {0=16..24:08b} {0=24..32:08b}]",
             int,
         );
-        // todo: custom error type
         loop {
-            while self.irq.is_low().unwrap() {
+            while self.irq.is_low().map_err(Error::GPIO)? {
                 core::hint::spin_loop()
             }
-            let firing: u32 = registers::InterruptRegister::read(&mut self.dev)?.into();
+            let firing: u32 = registers::InterruptRegister::read(&mut self.dev).map_err(Error::Interface)?.into();
             defmt::trace!("Got IRQ, {=u32:032b}", firing);
             if firing & u32::from(int) != 0 {
                 break Ok(());
@@ -261,19 +128,19 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     }
 
     /// Enables the oscillator and waits until it's stable
-    fn enable_oscillator(&mut self) -> Result<(), I::Error> {
-        let op_ctr = registers::OperationControl::read(&mut self.dev)?;
+    fn enable_oscillator(&mut self) -> Result<(), I, P> {
+        let op_ctr = registers::OperationControl::read(&mut self.dev).map_err(Error::Interface)?;
         // not already enabled
         if !op_ctr.en() {
             defmt::debug!("Enabling oscillator");
             // clear interrupts
-            let _ = registers::InterruptRegister::read(&mut self.dev)?;
+            let _ = registers::InterruptRegister::read(&mut self.dev).map_err(Error::Interface)?;
 
             let mut int = Interrupt::default();
             int.set_osc(true);
 
             self.enable_interrupts(int)?;
-            registers::OperationControl::modify(&mut self.dev, |reg| reg.set_en(true))?;
+            registers::OperationControl::modify(&mut self.dev, |reg| reg.set_en(true)).map_err(Error::Interface)?;
             self.wait_for_interrupt(int)?;
             defmt::debug!("Oscillator running");
             self.disable_interrupts(int)?;
@@ -281,46 +148,46 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         Ok(())
     }
 
-    fn command_and_wait(&mut self, cmd: DirectCommand) -> Result<(), I::Error> {
+    fn command_and_wait(&mut self, cmd: DirectCommand) -> Result<(), I, P> {
         let mut irq = Interrupt::default();
         irq.set_dct(true);
         self.enable_interrupts(irq)?;
-        self.dev.direct_command(cmd)?;
+        self.dev.direct_command(cmd).map_err(Error::Interface)?;
         self.wait_for_interrupt(irq)?;
         self.disable_interrupts(irq)
     }
 
     /// Delay using the peripheral's general purpose timer
-    pub fn delay(&mut self, d: GPTDuration) -> Result<(), I::Error> {
+    pub fn delay(&mut self, d: GPTDuration) -> Result<(), I, P> {
         let mut ticks = d.ticks();
         let mut irq = registers::Interrupt::default();
         irq.set_gpe(true);
         self.enable_interrupts(irq)?;
 
         while ticks > u16::MAX as u32 {
-            registers::GPTimer::from_ticks(u16::MAX).write(&mut self.dev)?;
-            self.dev.direct_command(DirectCommand::StartGPT)?;
+            registers::GPTimer::from_ticks(u16::MAX).write(&mut self.dev).map_err(Error::Interface)?;
+            self.dev.direct_command(DirectCommand::StartGPT).map_err(Error::Interface)?;
             self.wait_for_interrupt(irq)?;
 
             ticks -= u16::MAX as u32;
         }
-        registers::GPTimer::from_ticks(ticks as u16).write(&mut self.dev)?;
-        self.dev.direct_command(DirectCommand::StartGPT)?;
+        registers::GPTimer::from_ticks(ticks as u16).write(&mut self.dev).map_err(Error::Interface)?;
+        self.dev.direct_command(DirectCommand::StartGPT).map_err(Error::Interface)?;
         self.wait_for_interrupt(irq)?;
 
         self.disable_interrupts(irq)
     }
 
     /// Adjust regulators and returns the regulated voltage
-    pub fn adjust_regulators(&mut self) -> Result<u16, I::Error> {
+    pub fn adjust_regulators(&mut self) -> Result<u16, I, P> {
         registers::RegulatorControl::modify(&mut self.dev, |r| {
             r.set_reg_s(registers::regulator_control::RegulatedSettingSource::AdjustRegulators)
-        })?;
+        }).map_err(Error::Interface)?;
         self.command_and_wait(DirectCommand::AdjustRegulators)?;
 
-        let regulator_output = registers::RegulatorDisplay::read(&mut self.dev)?.reg();
+        let regulator_output = registers::RegulatorDisplay::read(&mut self.dev).map_err(Error::Interface)?.reg();
 
-        let base_voltage = if registers::IoConfiguration::read(&mut self.dev)?.sup3v() {
+        let base_voltage = if registers::IoConfiguration::read(&mut self.dev).map_err(Error::Interface)?.sup3v() {
             2400
         } else {
             3600
@@ -334,14 +201,14 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     /// The amplitude detector conversion gain is 0.6 VinPP / Vout referenced to the RF signal
     /// on a single RFI pin.  
     /// Thus, one LSB of the A/D converter output represents 13.02 mVPP on either of the RFI inputs.
-    pub fn measure_amplitude_raw(&mut self) -> Result<u8, I::Error> {
+    pub fn measure_amplitude_raw(&mut self) -> Result<u8, I, P> {
         use registers::{mode_definition, operation_control, receiver_configuration};
 
         // save registers
-        let op_bak = registers::OperationControl::read(&mut self.dev)?;
-        let mode_bak = registers::ModeDefinition::read(&mut self.dev)?;
-        let rx_conf_bak = registers::ReceiverConfiguration::read(&mut self.dev)?;
-        let aux_bak = registers::AuxiliaryModulationSetting::read(&mut self.dev)?;
+        let op_bak = registers::OperationControl::read(&mut self.dev).map_err(Error::Interface)?;
+        let mode_bak = registers::ModeDefinition::read(&mut self.dev).map_err(Error::Interface)?;
+        let rx_conf_bak = registers::ReceiverConfiguration::read(&mut self.dev).map_err(Error::Interface)?;
+        let aux_bak = registers::AuxiliaryModulationSetting::read(&mut self.dev).map_err(Error::Interface)?;
 
         // disable bits that influence the receiver chain
         let mut op_new = op_bak;
@@ -359,30 +226,30 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         let mut aux_new = aux_bak;
         aux_new.set_regulator_am(false);
 
-        op_new.write(&mut self.dev)?;
-        mode_new.write(&mut self.dev)?;
-        rx_conf_new.write(&mut self.dev)?;
-        aux_new.write(&mut self.dev)?;
+        op_new.write(&mut self.dev).map_err(Error::Interface)?;
+        mode_new.write(&mut self.dev).map_err(Error::Interface)?;
+        rx_conf_new.write(&mut self.dev).map_err(Error::Interface)?;
+        aux_new.write(&mut self.dev).map_err(Error::Interface)?;
 
         self.command_and_wait(DirectCommand::MeasureAmplitude)?;
-        let amplitude = registers::ADConverterOutput::read(&mut self.dev)?.value();
+        let amplitude = registers::ADConverterOutput::read(&mut self.dev).map_err(Error::Interface)?.value();
 
         // restore registers
-        op_bak.write(&mut self.dev)?;
-        mode_bak.write(&mut self.dev)?;
-        rx_conf_bak.write(&mut self.dev)?;
-        aux_bak.write(&mut self.dev)?;
+        op_bak.write(&mut self.dev).map_err(Error::Interface)?;
+        mode_bak.write(&mut self.dev).map_err(Error::Interface)?;
+        rx_conf_bak.write(&mut self.dev).map_err(Error::Interface)?;
+        aux_bak.write(&mut self.dev).map_err(Error::Interface)?;
 
         Ok(amplitude)
     }
 
-    pub fn measure_phase_raw(&mut self) -> Result<u8, I::Error> {
+    pub fn measure_phase_raw(&mut self) -> Result<u8, I, P> {
         self.command_and_wait(DirectCommand::MeasurePhase)?;
-        registers::ADConverterOutput::read(&mut self.dev).map(|r| r.value())
+        registers::ADConverterOutput::read(&mut self.dev).map(|r| r.value()).map_err(Error::Interface)
     }
 
     /// Measures the phase difference between the RFO (output) and RFI (input) signals
-    pub fn measure_phase(&mut self) -> Result<PhaseDifference, I::Error> {
+    pub fn measure_phase(&mut self) -> Result<PhaseDifference, I, P> {
         self.measure_phase_raw().map(PhaseDifference::from_raw)
     }
 
@@ -391,9 +258,9 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         &mut self,
         a: u8,
         b: u8,
-    ) -> Result<(), I::Error> {
+    ) -> Result<(), I, P> {
         let reg = registers::AntennaTuningControl::new(a, b);
-        reg.write(&mut self.dev)?;
+        reg.write(&mut self.dev).map_err(Error::Interface)?;
         // wait for variable capacitors to adjust
         self.delay(GPTDuration::millis(10))
     }
@@ -401,10 +268,9 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     /// Sets the AAT capacitors' DAC output and measures the new amplitude and phase
     pub fn set_capacitance_and_measure(
         &mut self,
-        // TODO: use peripheral's timer for delay
         a: u8,
         b: u8,
-    ) -> Result<(u8, u8), I::Error> {
+    ) -> Result<(u8, u8), I, P> {
         self.set_aat_capacitance(a, b)?;
 
         let amplitude = self.measure_amplitude_raw()?;
@@ -415,8 +281,8 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     pub fn tune_antennas(
         &mut self,
         config: aat::TunerSettings,
-    ) -> Result<(), I::Error> {
-        registers::IoConfiguration::modify(&mut self.dev, |r| r.set_aat_en(true))?;
+    ) -> Result<(), I, P> {
+        registers::IoConfiguration::modify(&mut self.dev, |r| r.set_aat_en(true)).map_err(Error::Interface)?;
         let mut state = aat::TunerState::new_from_settings(&config, self)?;
         while !state.is_done() {
             let best_dir =
