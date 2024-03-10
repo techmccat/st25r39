@@ -4,8 +4,7 @@ use embedded_hal::digital::InputPin;
 
 use crate::{
     registers::{self, Register},
-    Interface,
-    Error,
+    Error, Interface,
 };
 
 #[derive(Clone, Debug, defmt::Format)]
@@ -80,7 +79,8 @@ impl TunerState {
         driver: &mut crate::ST25R3916<I, P>,
     ) -> crate::Result<Self, I, P> {
         let (a, b) = if conf.a_start.is_none() || conf.b_start.is_none() {
-            let reg = registers::AntennaTuningControl::read(&mut driver.dev).map_err(Error::Interface)?;
+            let reg =
+                registers::AntennaTuningControl::read(&mut driver.dev).map_err(Error::Interface)?;
             (Some(reg.a()), Some(reg.b()))
         } else {
             (None, None)
@@ -92,11 +92,7 @@ impl TunerState {
             b: conf.b_start.unwrap_or(b.unwrap()),
             step_a: conf.a_step,
             step_b: conf.b_step,
-            diff: compute_diff(
-                conf,
-                amp,
-                phase
-            ),
+            diff: compute_diff(conf, amp, phase),
         };
         defmt::debug!("New state: {:?}, amp={=u8}, phase={=u8}", ret, amp, phase);
         Ok(ret)
@@ -107,7 +103,6 @@ impl TunerState {
     pub fn halve_steps(&mut self) {
         self.step_a /= 2;
         self.step_b /= 2;
-        defmt::trace!("Step values: a={=u8}, b={=u8}", self.step_a, self.step_b);
     }
 }
 

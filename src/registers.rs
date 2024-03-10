@@ -361,15 +361,15 @@ pub struct Iso14443ASettings {
     ///
     /// Width is defined in number of 13.39Mhz clock cycles
     #[doc(alias = "p_len")]
-    pulse_width: u4,
+    pub pulse_width: u4,
     /// Support of NFCIP-1 Transport Frame format
     ///
     /// Must not be set in bitrate detection mode
-    nfc_f0: bool,
+    pub nfc_f0: bool,
     /// Only supported for 106kb/s data rate
-    no_rx_parity: bool,
+    pub no_rx_parity: bool,
     /// Transmission is to be done with the transmit without CRC command
-    no_tx_parity: bool,
+    pub no_tx_parity: bool,
 }
 
 pub mod iso14443b_settings {
@@ -900,7 +900,7 @@ register_impl!(GPTimer, u16, 0x13, A);
 #[derive(FromBits, DebugBits, Format, Clone, Copy)]
 pub struct GPTimer {
     pub msb: u8,
-    pub lsb: u8
+    pub lsb: u8,
 }
 impl GPTimer {
     pub fn from_ticks(ticks: u16) -> Self {
@@ -913,17 +913,107 @@ impl GPTimer {
     }
 }
 
+register_impl!(MRTimer, u8, 0x0F, A);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+pub struct MRTimer(pub u8);
+
+impl Default for MRTimer {
+    fn default() -> Self {
+        0b00001000.into()
+    }
+}
+
+register_impl!(NRTimer, u16, 0x10, A);
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+pub struct NRTimer {
+    pub msb: u8,
+    pub lsb: u8,
+}
+impl NRTimer {
+    pub fn from_ticks(ticks: u16) -> Self {
+        let msb = ticks >> 8;
+        let lsb = ticks & 0xFF;
+        Self::new(msb as u8, lsb as u8)
+    }
+    pub fn to_ticks(self) -> u16 {
+        ((self.msb() as u16) << 8) + self.lsb() as u16
+    }
+}
+
+pub mod timer_emv_control {
+    use bilge::prelude::*;
+    use defmt::Format;
+
+    #[bitsize(1)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    pub enum NrtStep {
+        #[default]
+        Step64Fc = 0,
+        Step4096Fc = 1,
+    }
+
+    #[bitsize(1)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    pub enum NrtStart {
+        #[default]
+        TxEnd = 0,
+        PeerFieldOn = 1,
+    }
+
+    #[bitsize(1)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    pub enum MrtStep {
+        #[default]
+        Step64Fc = 0,
+        Step512Fc = 1,
+    }
+
+    #[bitsize(3)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    pub enum GptStart {
+        #[default]
+        NoTrigger = 0,
+        RxEnd = 1,
+        RxStart = 2,
+        /// In AP2P the timer is used to turn off the field and enables NRT according to nrt_nfc
+        TxEnd = 3,
+        #[fallback]
+        Reserved,
+    }
+}
+
+register_impl!(TimerEMVControl, u8, 0x12, A);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct TimerEMVControl {
+    pub nrt_step: timer_emv_control::NrtStep,
+    /// NRT in EMV mode
+    pub nrt_emv: bool,
+    /// NRT start condition
+    pub nrt_nfc: timer_emv_control::NrtStart,
+    pub mrt_step: timer_emv_control::MrtStep,
+    reserved: u1,
+    pub gpt_start: timer_emv_control::GptStart,
+}
+
+register_impl!(NFCFieldOnGuardTimer, u8, 0x15, B);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct NFCFieldOnGuardTimer(pub u8);
+
 register_impl!(InterruptRegister, u32, 0x1A, A);
 /// Interrupt registers
 #[bitsize(32)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
-pub struct InterruptRegister(Interrupt);
+pub struct InterruptRegister(pub Interrupt);
 
 register_impl!(InterruptMask, u32, 0x16, A);
 /// Interrupt mask registers
 #[bitsize(32)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
-pub struct InterruptMask(Interrupt);
+pub struct InterruptMask(pub Interrupt);
 
 #[bitsize(32)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
@@ -1018,6 +1108,35 @@ pub struct Interrupt {
     pub ppon2: bool,
 }
 
+register_impl!(FifoStatus, u16, 0x1E, A);
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Clone, Copy, Default)]
+pub struct FifoStatus {
+    lsb_cap: u8,
+    pub no_parity: bool,
+    pub bits: u3,
+    pub overflow: bool,
+    pub underflow: bool,
+    msb_cap: u2,
+}
+
+impl FifoStatus {
+    pub fn capacity(&self) -> (u16, u8) {
+        let bytes = self.lsb_cap() as u16 | (self.msb_cap().value() as u16) << 8;
+        (bytes, self.bits().into())
+    }
+}
+
+impl Format for FifoStatus {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(
+            fmt,
+            "FifoStatus {{ lsb: {0=0..8}, np_lb: {0=8..9}, lb: {0=9..12}, ovr: {0=12..13}, unf: {0=13..14}, msb: {0=14..16} }}",
+            u16::from(*self)
+        )
+    }
+}
+
 pub mod regulator_control {
     use bilge::prelude::*;
     use defmt::Format;
@@ -1045,6 +1164,26 @@ pub mod regulator_control {
         AdjustRegulators = 0,
         /// Regulated voltages come from [`RegulatorControl`].rege
         ExternalRegister = 1,
+    }
+}
+
+register_impl!(NumTxBytes, u16, 0x22, A);
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct NumTxBytes {
+    pub lsb: u8,
+    pub msb: u5,
+    pub bits: u3,
+}
+
+impl NumTxBytes {
+    pub fn from_bits(bits: u16) -> Self {
+        let bytes = bits / 8;
+        let bits = bits % 8;
+        let lsb = (bytes & 0xFF) as u8;
+        let msb = u5::new((bytes >> 8) as u8 & 0x1F);
+
+        Self::new(lsb, msb, u3::new(bits as u8))
     }
 }
 
@@ -1096,6 +1235,63 @@ impl Default for AntennaTuningControl {
     }
 }
 
+pub mod tx_driver {
+    use bilge::prelude::*;
+    use defmt::Format;
+
+    #[bitsize(4)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    pub enum DriverResistance {
+        #[default]
+        Normalized1_00 = 0,
+        Normalized1_19 = 1,
+        Normalized1_40 = 2,
+        Normalized1_61 = 3,
+        Normalized1_79 = 4,
+        Normalized2_02 = 5,
+        Normalized2_49 = 6,
+        Normalized2_94 = 7,
+        Normalized3_41 = 8,
+        Normalized4_06 = 9,
+        Normalized5_95 = 10,
+        Normalized8_26 = 11,
+        Normalized17_1 = 12,
+        Normalized36_6 = 13,
+        Normalized51_2 = 14,
+        HighImpedance = 15,
+    }
+
+    #[bitsize(4)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    pub enum AmModulation {
+        Percent0 = 0,
+        Percent8 = 1,
+        Percent10 = 2,
+        Percent11 = 3,
+        Percent12 = 4,
+        Percent13 = 5,
+        Percent14 = 6,
+        #[default]
+        Percent15 = 7,
+        Percent20 = 8,
+        Percent25 = 9,
+        Percent30 = 10,
+        Percent40 = 11,
+        Percent50 = 12,
+        Percent60 = 13,
+        Percent70 = 14,
+        Percent82 = 15,
+    }
+}
+
+register_impl!(TxDriver, u8, 0x28, A);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct TxDriver {
+    pub driver_resistance: tx_driver::DriverResistance,
+    pub am_modulation: tx_driver::AmModulation,
+}
+
 register_impl!(AuxiliaryModulationSetting, u8, 0x28, B);
 #[bitsize(8)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
@@ -1127,6 +1323,33 @@ pub struct AuxiliaryModulationSetting {
     /// - true: with act_amsink=0 and small VDD_AM capacitor (10-50nF, depending on RF load)
     /// - false: act_amsink=1 and big VDD_AM capacitor (2.2uF)
     pub disable_am_regulator: bool,
+}
+
+register_impl!(AWSConfig, u16, 0x2E, B);
+#[bitsize(16)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+pub struct AWSConfig {
+    /// Enable regulator shape for TX field on/off
+    pub rgs_txonoff: bool,
+    /// Use VDD_RF after each modulation gap
+    ///
+    /// Otherwise only used for RX
+    pub vddrf_rf_only: bool,
+    reserved: u1,
+    /// VDD_RF regulator continuous operation, must be set to 1
+    pub vddrf_cont: bool,
+    reserved: u4,
+    /// Time constant for the first order filter for the AM reference
+    ///
+    /// Higher values increase signal rise/fall times
+    pub am_filter: u4,
+    /// Enable strong sink during AWS modulation
+    pub en_modsink: bool,
+    /// Symmetrical shape
+    ///
+    /// Preferred symmetrical for ASK, non-symmetrical for OOK
+    pub am_sym: bool,
+    reserved: u2,
 }
 
 register_impl!(IcIdentity, u8, 0x3F, A);

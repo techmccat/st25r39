@@ -30,7 +30,7 @@ path = ".."
 [dependencies.stm32g4xx-hal]
 # path = "../stm32g4xx-hal"
 git = "https://github.com/techmccat/stm32g4xx-hal"
-branch = "hal-1"
+branch = "instance-traits"
 # version = "0.0.2"
 features = ["rt", "stm32g474"]
 
@@ -61,7 +61,7 @@ codegen-units = 1
 debug = 2
 debug-assertions = false # <-
 incremental = false
-lto = 'thin'
+lto = 'fat'
 opt-level = 3            # <-
 overflow-checks = false  # <-
 
@@ -71,7 +71,7 @@ codegen-units = 1
 debug = 2
 debug-assertions = false # <-
 incremental = false
-lto = 'thin'
+lto = 'fat'
 opt-level = 3            # <-
 overflow-checks = false  # <-
 

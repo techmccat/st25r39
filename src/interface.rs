@@ -1,5 +1,5 @@
+use crate::{registers::RegisterSpace, DirectCommand};
 use embedded_hal::spi::{Operation, SpiDevice};
-use crate::{DirectCommand, registers::RegisterSpace};
 pub trait Interface: Sized {
     type Error;
     /// Write one or more registers
@@ -137,5 +137,3 @@ impl<S: SpiDevice> SpiInterface<S> {
         Self { dev }
     }
 }
-
-

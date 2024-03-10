@@ -59,5 +59,5 @@ pub enum DirectCommand {
     StopNoResponseTimer = 0xE8,
     TriggerRcCalibration = 0xEA,
     RegisterSpaceBAccess = 0xFB,
-    TestAccess = 0xFC
+    TestAccess = 0xFC,
 }
