@@ -33,7 +33,7 @@ pub mod helper_traits {
 
 // i don't like having to specify the assocaited type on every call but i haven't found better ways
 // to semi-automatically implement the trait for registers which are Into<Integer>
-pub trait Register: Sized + FromLeBytes + ToLeBytes {
+pub trait Register: Copy + Sized + PartialEq + FromLeBytes + ToLeBytes {
     const ADDRESS: u8;
     const SPACE: RegisterSpace;
     fn read<I: super::Interface>(iface: &mut I) -> Result<Self, I::Error> {
@@ -49,9 +49,13 @@ pub trait Register: Sized + FromLeBytes + ToLeBytes {
         mut f: impl FnMut(&mut Self),
     ) -> Result<(), I::Error> {
         let mut reg = Self::read::<I>(iface)?;
+        let copy = reg;
         f(&mut reg);
-        reg.write::<I>(iface)?;
-        Ok(())
+        if reg != copy {
+            reg.write::<I>(iface)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -84,7 +88,7 @@ pub mod io_configuration {
     use defmt::Format;
 
     #[bitsize(2)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum OutClk {
         #[default]
         Mhz3_39 = 0b00,
@@ -94,17 +98,17 @@ pub mod io_configuration {
     }
 
     #[bitsize(2)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum I2cThd {
         #[default]
-        T380ns160ns = 0b00,
-        T180ns160ns = 0b01,
-        T180ns70ns = 0b10,
-        T100ns70ns = 0b11,
+        Standard = 0b00,
+        Fast = 0b01,
+        FastPlus = 0b10,
+        HighSpeed = 0b11,
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AmRef {
         #[default]
         VddDr = 0,
@@ -112,7 +116,7 @@ pub mod io_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum IoDriverLevel {
         #[default]
         Normal = 0,
@@ -123,7 +127,7 @@ pub mod io_configuration {
 register_impl!(IoConfiguration, u16, 0x00, A);
 /// Controls I/O parameters
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IoConfiguration {
     /// LF clock on MCU_CLK
     ///
@@ -177,7 +181,7 @@ pub mod operation_control {
     use defmt::Format;
 
     #[bitsize(2)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum FieldDetectorControl {
         /// External field detector off
         #[default]
@@ -191,7 +195,7 @@ pub mod operation_control {
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum RxChanEnable {
         /// Both AM and PM channels are enabled
         #[default]
@@ -204,7 +208,7 @@ pub mod operation_control {
 register_impl!(OperationControl, u8, 0x02, A);
 /// Operation control register
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OperationControl {
     /// External field detector control
     pub en_fd_c: operation_control::FieldDetectorControl,
@@ -226,7 +230,7 @@ pub mod mode_definition {
     use defmt::Format;
 
     #[bitsize(2)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum NfcAutomaticResponse {
         #[default]
         Off = 0b00,
@@ -236,7 +240,7 @@ pub mod mode_definition {
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum ModulationMode {
         #[default]
         OOK = 0,
@@ -245,7 +249,7 @@ pub mod mode_definition {
 
     #[bitsize(5)]
     #[repr(u8)]
-    #[derive(FromBits, Debug, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum OperationMode {
         InitiatorActiveNfcIP1 = 0b00000,
         #[default]
@@ -313,7 +317,7 @@ pub mod mode_definition {
 register_impl!(ModeDefinition, u8, 0x03, A);
 /// Controls NFC mode, moduleation and automatic response
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ModeDefinition {
     /// Automatically starts the Response RF collision
     // Refer to datasheet section 4.4.5 for handling
@@ -329,7 +333,7 @@ pub mod bitrate_definition {
     use defmt::Format;
 
     #[bitsize(2)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum Bitrate {
         #[default]
         Kbps106 = 0b00,
@@ -341,7 +345,7 @@ pub mod bitrate_definition {
 
 register_impl!(BitrateDefinition, u8, 0x04, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BitrateDefinition {
     pub rx_rate: bitrate_definition::Bitrate,
     reserved: u2,
@@ -352,7 +356,7 @@ pub struct BitrateDefinition {
 register_impl!(Iso14443ASettings, u8, 0x05, A);
 /// ISO14443A and NFC 106kb/s settings register
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Iso14443ASettings {
     /// Standard or ISO14443A anticollision frame
     #[doc(alias = "antcl")]
@@ -380,7 +384,7 @@ pub mod iso14443b_settings {
     ///
     /// Also valid for NFCIP-1 active communication bit rates 212 and 424 kb/s
     #[bitsize(2)]
-    #[derive(Debug, FromBits, Format, Clone, Copy, Default)]
+    #[derive(Debug, FromBits, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum FelicaPreambleLength {
         #[default]
         B48 = 0b00,
@@ -393,7 +397,7 @@ pub mod iso14443b_settings {
 register_impl!(Iso14443BSettings, u16, 0x06, A);
 /// ISO14443B settings register
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Iso14443BSettings {
     reserved: u1,
     /// Sets SOF and EOF settings in middle of specification
@@ -435,7 +439,7 @@ register_impl!(NfcIp1Passive, u8, 0x08, A);
 /// Disabling automatic responses (anti-collison and SENSF_RES)
 /// in passive target mode makes the reader operate completely via the FIFO
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NfcIp1Passive {
     /// Disable automatic anti-collision detection
     #[doc(alias = "d_106_ac_a")]
@@ -484,7 +488,7 @@ pub mod stream_mode {
     /// Number of subcarrier pulses per report period for subcarrier stream mode
     #[bitsize(2)]
     #[repr(u8)]
-    #[derive(FromBits, Debug, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum SubcarrierPulseCount {
         #[default]
         N4 = 0b10,
@@ -502,7 +506,7 @@ pub mod stream_mode {
 
     #[bitsize(2)]
     #[repr(u8)]
-    #[derive(FromBits, Debug, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum SubcarrierFrequency {
         /// fc/16, only valid for BPSK mode
         #[default]
@@ -526,7 +530,7 @@ register_impl!(StreamMode, u8, 0x09, A);
 ///
 /// Configuration of parameters for subcarrier stream (transparent) mode
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamMode {
     /// Time period for Tx modulator control
     pub stx: stream_mode::TxModulatorTimePeriod,
@@ -544,7 +548,7 @@ pub mod auxiliary {
     /// NFCID1 Size
     #[bitsize(2)]
     #[repr(u8)]
-    #[derive(FromBits, Debug, Clone, Copy, Format, Default)]
+    #[derive(FromBits, Debug, Clone, Copy, Format, Default, PartialEq, Eq)]
     pub enum NfcIdSize {
         /// 4 bytes
         #[default]
@@ -559,7 +563,7 @@ pub mod auxiliary {
 register_impl!(Auxiliary, u8, 0x0A, A);
 /// Auxiliary definition register
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Auxiliary {
     /// Value for direct commands NFC Initial Field On and NFC Response Field On
     pub nfc_n: u2,
@@ -582,7 +586,7 @@ pub struct Auxiliary {
 register_impl!(EmdSuppressionConfig, u8, 0x05, B);
 /// EMD Suppression Control register
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmdSuppressionConfig {
     /// Minimum received frame length
     ///
@@ -604,7 +608,7 @@ pub struct EmdSuppressionConfig {
 register_impl!(SubcarrierStartTimer, u8, 0x06, B);
 /// Subcarrier start timer register
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SubcarrierStartTimer {
     /// Subcarrier start time
     ///
@@ -628,7 +632,7 @@ pub mod receiver_configuration {
     /// First and third stage high pass filtering settings
     #[bitsize(4)]
     #[repr(u8)]
-    #[derive(FromBits, Debug, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum FirstThirdZero {
         /// First stage zero: 60kHz, third stage zero: 400kHz
         #[default]
@@ -657,7 +661,7 @@ pub mod receiver_configuration {
 
     /// -1dB point for the low-pass filter
     #[bitsize(3)]
-    #[derive(FromBits, Debug, Clone, Copy, Default, Format)]
+    #[derive(FromBits, Debug, Clone, Copy, Default, Format, PartialEq, Eq)]
     pub enum LowPassControl {
         #[default]
         KHz1200 = 0b000,
@@ -670,7 +674,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum ChannelSelect {
         #[default]
         ChannelAM = 0,
@@ -678,7 +682,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AGCRatio {
         #[default]
         Ratio3 = 0,
@@ -686,7 +690,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AGCAlgorithm {
         #[default]
         Preset = 0,
@@ -694,7 +698,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AGCDuration {
         /// AGC operates on first 8 subcarrier pulses
         First8 = 0,
@@ -704,7 +708,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum SquelchRatio {
         /// Recommended for ISO-A 106k correlator, ISO-A HBR/ISO-B pulse decoder,
         /// ISO-15693, and FeliCa
@@ -715,7 +719,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AMDemodulatorSelect {
         #[default]
         PeakDetector = 0,
@@ -723,7 +727,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum DemodulationMode {
         /// AM/PM demodulation
         #[default]
@@ -735,7 +739,7 @@ pub mod receiver_configuration {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum LFOperation {
         #[default]
         Differential = 0,
@@ -747,7 +751,7 @@ pub mod receiver_configuration {
 register_impl!(ReceiverConfiguration, u32, 0x0B, A);
 /// Receiver configuration register
 #[bitsize(32)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct ReceiverConfiguration {
     /// Bits z12k, z600k, h80 and h200 according to table 6 of the datasheet
     ///
@@ -833,7 +837,7 @@ pub mod p2p_receiver_config {
     use defmt::Format;
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AskThreshold {
         #[default]
         Percent97 = 0,
@@ -841,7 +845,7 @@ pub mod p2p_receiver_config {
     }
 
     #[bitsize(2)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AskRCConstant {
         Us8_4 = 0b00,
         Us6_8 = 0b01,
@@ -851,7 +855,7 @@ pub mod p2p_receiver_config {
     }
 
     #[bitsize(2)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum OokRCConstant {
         #[default]
         Us1_4 = 0b00,
@@ -864,7 +868,7 @@ pub mod p2p_receiver_config {
 register_impl!(P2PRxConfig, u8, 0x0B, B);
 /// Peer to peer receiver configuration
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct P2PRxConfig {
     /// ASK threshold level
     pub ask_thd: p2p_receiver_config::AskThreshold,
@@ -897,7 +901,7 @@ impl Default for P2PRxConfig {
 register_impl!(GPTimer, u16, 0x13, A);
 /// General purpose timer ticks
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct GPTimer {
     pub msb: u8,
     pub lsb: u8,
@@ -915,7 +919,7 @@ impl GPTimer {
 
 register_impl!(MRTimer, u8, 0x0F, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct MRTimer(pub u8);
 
 impl Default for MRTimer {
@@ -926,7 +930,7 @@ impl Default for MRTimer {
 
 register_impl!(NRTimer, u16, 0x10, A);
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct NRTimer {
     pub msb: u8,
     pub lsb: u8,
@@ -947,7 +951,7 @@ pub mod timer_emv_control {
     use defmt::Format;
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum NrtStep {
         #[default]
         Step64Fc = 0,
@@ -955,7 +959,7 @@ pub mod timer_emv_control {
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum NrtStart {
         #[default]
         TxEnd = 0,
@@ -963,7 +967,7 @@ pub mod timer_emv_control {
     }
 
     #[bitsize(1)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum MrtStep {
         #[default]
         Step64Fc = 0,
@@ -971,7 +975,7 @@ pub mod timer_emv_control {
     }
 
     #[bitsize(3)]
-    #[derive(FromBits, Debug, Format, Clone, Copy, Default)]
+    #[derive(FromBits, Debug, Format, Clone, Copy, Default, PartialEq, Eq)]
     pub enum GptStart {
         #[default]
         NoTrigger = 0,
@@ -986,7 +990,7 @@ pub mod timer_emv_control {
 
 register_impl!(TimerEMVControl, u8, 0x12, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TimerEMVControl {
     pub nrt_step: timer_emv_control::NrtStep,
     /// NRT in EMV mode
@@ -1000,23 +1004,23 @@ pub struct TimerEMVControl {
 
 register_impl!(NFCFieldOnGuardTimer, u8, 0x15, B);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NFCFieldOnGuardTimer(pub u8);
 
 register_impl!(InterruptRegister, u32, 0x1A, A);
 /// Interrupt registers
 #[bitsize(32)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InterruptRegister(pub Interrupt);
 
 register_impl!(InterruptMask, u32, 0x16, A);
 /// Interrupt mask registers
 #[bitsize(32)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InterruptMask(pub Interrupt);
 
 #[bitsize(32)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Interrupt {
     reserved: u1,
     /// Automatic reception restart
@@ -1110,7 +1114,7 @@ pub struct Interrupt {
 
 register_impl!(FifoStatus, u16, 0x1E, A);
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FifoStatus {
     lsb_cap: u8,
     pub no_parity: bool,
@@ -1143,7 +1147,7 @@ pub mod regulator_control {
 
     /// Voltage to be measured
     #[bitsize(3)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum MeasureSource {
         #[default]
         Vdd = 0b000,
@@ -1157,7 +1161,7 @@ pub mod regulator_control {
     }
 
     #[bitsize(1)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum RegulatedSettingSource {
         /// Regulated voltages come from the Adjust Regulators command
         #[default]
@@ -1169,7 +1173,7 @@ pub mod regulator_control {
 
 register_impl!(NumTxBytes, u16, 0x22, A);
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NumTxBytes {
     pub lsb: u8,
     pub msb: u5,
@@ -1190,7 +1194,7 @@ impl NumTxBytes {
 register_impl!(RegulatorControl, u8, 0x2C, A);
 /// Regulator voltage control
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RegulatorControl {
     /// Defines source of direct command Measure power supply.
     pub mpsv: regulator_control::MeasureSource,
@@ -1204,7 +1208,7 @@ pub struct RegulatorControl {
 
 register_impl!(RegulatorDisplay, u8, 0x2C, B);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RegulatorDisplay {
     /// VDD_RF regulator in current limit mode
     pub i_lim: bool,
@@ -1217,14 +1221,14 @@ pub struct RegulatorDisplay {
 
 register_impl!(ADConverterOutput, u8, 0x25, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ADConverterOutput {
     pub value: u8,
 }
 
 register_impl!(AntennaTuningControl, u16, 0x26, A);
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, PartialEq, Eq)]
 pub struct AntennaTuningControl {
     pub a: u8,
     pub b: u8,
@@ -1240,7 +1244,7 @@ pub mod tx_driver {
     use defmt::Format;
 
     #[bitsize(4)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum DriverResistance {
         #[default]
         Normalized1_00 = 0,
@@ -1262,7 +1266,7 @@ pub mod tx_driver {
     }
 
     #[bitsize(4)]
-    #[derive(Format, FromBits, Debug, Clone, Copy, Default)]
+    #[derive(Format, FromBits, Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub enum AmModulation {
         Percent0 = 0,
         Percent8 = 1,
@@ -1286,7 +1290,7 @@ pub mod tx_driver {
 
 register_impl!(TxDriver, u8, 0x28, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TxDriver {
     pub driver_resistance: tx_driver::DriverResistance,
     pub am_modulation: tx_driver::AmModulation,
@@ -1294,7 +1298,7 @@ pub struct TxDriver {
 
 register_impl!(AuxiliaryModulationSetting, u8, 0x28, B);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuxiliaryModulationSetting {
     reserved: u2,
     /// Regulator shaped AM modulation enable
@@ -1327,7 +1331,7 @@ pub struct AuxiliaryModulationSetting {
 
 register_impl!(AWSConfig, u16, 0x2E, B);
 #[bitsize(16)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AWSConfig {
     /// Enable regulator shape for TX field on/off
     pub rgs_txonoff: bool,
@@ -1354,7 +1358,7 @@ pub struct AWSConfig {
 
 register_impl!(IcIdentity, u8, 0x3F, A);
 #[bitsize(8)]
-#[derive(FromBits, DebugBits, Format, Clone, Copy, Default)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IcIdentity {
     pub rev_code: u3,
     pub type_code: u5,
