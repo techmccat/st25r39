@@ -39,7 +39,7 @@ fn main() -> ! {
 
     let spi_bus = dp
         .SPI1
-        .spi((sck, miso, mosi), spi::MODE_1, 400.kHz(), &mut rcc);
+        .spi((sck, miso, mosi), spi::MODE_1, 4.MHz(), &mut rcc);
     let interface = SpiInterface::new(ExclusiveDevice::new(spi_bus, cs, NoDelay));
 
     let mut driver = ST25R3916::init(interface, irq).unwrap();

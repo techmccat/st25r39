@@ -26,7 +26,7 @@ fn main() -> ! {
     let mut cs = gpiob.pb6.into_push_pull_output();
     cs.set_high().unwrap();
 
-    let spi_bus = dp.SPI1.spi((sck, miso, mosi), spi::MODE_1, 400.kHz(), &mut rcc);
+    let spi_bus = dp.SPI1.spi((sck, miso, mosi), spi::MODE_1, 4.MHz(), &mut rcc);
     defmt::info!("SPI init done");
     let interface = SpiInterface::new(ExclusiveDevice::new(spi_bus, cs, NoDelay));
 
