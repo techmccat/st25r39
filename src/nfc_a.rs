@@ -1,6 +1,6 @@
 use core::{cmp::min, u8};
 
-use bilge::arbitrary_int::u2;
+use bilge::{arbitrary_int::{u2, u5}, bitsize};
 use embedded_hal::digital::InputPin;
 
 use crate::{
@@ -10,15 +10,19 @@ use crate::{
     Error, Result,
 };
 
-pub const MINIMUM_FDT_NFCA: u32 = 1620;
-pub const FWT_ADJUSTMENT: u32 = 64;
-pub const FWT_ADJUSTMENT_NFCA: u32 = 64 + 512;
-pub const FDT_LISTEN_FC: u32 = 1172;
-pub const FDT_LISTEN_MRT_ADJUSTMENT: u32 = 64;
-pub const FDT_LISTEN_NFCA_ADJUSTMENT: u32 = 276 - 64;
-pub const FDT_POLL_POLLER: u32 = 6780;
-pub const FDT_POLL_ADJUSTMENT: u32 = 80;
-pub(crate) const GUARD_TIME_US: u32 = 5_000;
+/// Minimum PCD to PICC delay, in fc
+///
+/// Per spec it's 1172, adding 3\*128 as margin
+pub const FDT_A_LISTEN_RELAXED: u32 = 1620;
+pub const FDT_A_LISTEN_MIN: u32 = 1172;
+/// Minimum PCD to PICC delay, in fc
+pub const FDT_A_POLL: u32 = 6780;
+
+/// Margin for execution delay
+pub const FDT_A_ADJUSTMENT: i32 = 512;
+pub const MRT_ADJUSTMENT: i32 = -256;
+
+pub const GUARD_TIME_US: u32 = 5_000;
 
 pub enum ShortFrame {
     ReqA,
@@ -31,7 +35,7 @@ pub struct Iso14443aInitiator<I, P>(pub(crate) crate::ST25R3916<I, P>);
 impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
     pub fn detect_presence(&mut self, rx_buf: &mut [u8]) -> Result<bool, I, P> {
         self.0.field_on_and_wait_gt()?;
-        let res = self.transceive_short_frame(rx_buf, ShortFrame::ReqA, MINIMUM_FDT_NFCA);
+        let res = self.transceive_short_frame(rx_buf, ShortFrame::ReqA, FDT_A_LISTEN_RELAXED);
         Ok(match res {
             Ok(_len) => true,
             Err(Error::CollisionDetected) => true,
@@ -56,12 +60,8 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             self.0.enable_interrupts(Interrupt::new_gpe())?;
             self.0.wait_for_interrupt(Interrupt::new_gpe())?;
         }
-        let nrt_ticks = min(u16::MAX as u32, fwt + FWT_ADJUSTMENT + FWT_ADJUSTMENT_NFCA) / 64;
+        let nrt_ticks = min(u16::MAX as i32, (fwt as i32 + FDT_A_ADJUSTMENT) / 64);
         self.0.set_nrt(nrt_ticks as u16)?;
-
-        let mrt_ticks =
-            (FDT_LISTEN_FC - FDT_LISTEN_MRT_ADJUSTMENT - FDT_LISTEN_NFCA_ADJUSTMENT) / 64;
-        self.0.set_mrt(mrt_ticks as u8)?;
 
         self.prepare_transceive(TransceiveConfig {
             // doesn't really need to be set for short frames or anticollision

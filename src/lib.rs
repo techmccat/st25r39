@@ -431,11 +431,15 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         // 5ms guard time
         self.set_guard_time(nfc_a::GUARD_TIME_US)?;
 
-        // configure gpt as fdt
-        let gpt_ticks = nfc_a::FDT_POLL_POLLER - nfc_a::FDT_POLL_ADJUSTMENT;
+        // configure gpt as fdt_poll
+        let gpt_ticks = nfc_a::FDT_A_POLL as i32 + nfc_a::FDT_A_ADJUSTMENT;
         self.set_gpt(gpt_ticks as u16)?;
         registers::TimerEMVControl::modify(&mut self.dev, |r| r.set_gpt_start(GptStart::RxEnd))
             .map_err(Error::Interface)?;
+
+        let mrt_ticks =
+            (nfc_a::FDT_A_LISTEN_MIN as i32 + nfc_a::MRT_ADJUSTMENT) / 64;
+        self.set_mrt(mrt_ticks as u8)?;
 
         Ok(nfc_a::Iso14443aInitiator(self))
     }
