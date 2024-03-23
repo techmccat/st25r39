@@ -38,7 +38,7 @@ pub trait Register: Copy + Sized + PartialEq + FromLeBytes + ToLeBytes {
     const SPACE: RegisterSpace;
     fn read<I: super::Interface>(iface: &mut I) -> Result<Self, I::Error> {
         let mut buf = Self::ByteArray::default();
-        iface.register_read(Self::ADDRESS, Self::SPACE, &mut buf.as_mut())?;
+        iface.register_read(Self::ADDRESS, Self::SPACE, buf.as_mut())?;
         Ok(Self::from_le_bytes(buf))
     }
     fn write<I: super::Interface>(self, iface: &mut I) -> Result<(), I::Error> {

@@ -81,6 +81,7 @@ pub type Result<T, I, P> = core::result::Result<T, Error<I, P>>;
 pub struct ST25R3916<I, P> {
     dev: I,
     irq: P,
+    mask: u32,
 }
 
 impl<I: Interface, P: InputPin> ST25R3916<I, P> {
@@ -93,7 +94,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
 
     /// Takes ownership of the interface and initializes the device
     pub fn init(dev: I, irq: P) -> Result<Self, I, P> {
-        let mut drv = Self { dev, irq };
+        let mut drv = Self { dev, irq, mask: u32::MAX };
         drv.dev.init_peripheral().map_err(Error::Interface)?;
 
         let identity: u8 = registers::IcIdentity::read(&mut drv.dev)
@@ -118,7 +119,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         // disable interrupts
         drv.disable_interrupts(u32::MAX.into())?;
         // clear interrupts
-        registers::InterruptRegister::read(&mut drv.dev).map_err(Error::Interface)?;
+        drv.get_interrupts()?;
         Ok(drv)
     }
 
@@ -151,18 +152,15 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         Ok(mv)
     }
 
-    fn clear_interrupts(&mut self) -> Result<(), I, P> {
+    fn get_interrupts(&mut self) -> Result<Interrupt, I, P> {
         registers::InterruptRegister::read(&mut self.dev)
             .map_err(Error::Interface)
-            .map(|_| ())
+            .map(|r| r.val_0())
     }
 
     fn enable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
-        let mask: u32 = registers::InterruptMask::read(&mut self.dev)
-            .map_err(Error::Interface)?
-            .into();
-        let new_mask = mask & !u32::from(int);
-        if mask != new_mask {
+        let new_mask = self.mask & !u32::from(int);
+        if new_mask != self.mask {
             registers::InterruptMask::from(new_mask)
                 .write(&mut self.dev)
                 .map_err(Error::Interface)
@@ -171,14 +169,14 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         }
     }
     fn disable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
-        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)
-            .map_err(Error::Interface)?
-            .into();
-        mask |= u32::from(int);
-        registers::InterruptMask::from(mask)
-            .write(&mut self.dev)
-            .map_err(Error::Interface)?;
-        Ok(())
+        let new_mask = self.mask | u32::from(int);
+        if new_mask != self.mask {
+            registers::InterruptMask::from(new_mask)
+                .write(&mut self.dev)
+                .map_err(Error::Interface)
+        } else {
+            Ok(())
+        }
     }
     fn wait_for_interrupt(&mut self, int: Interrupt) -> Result<(), I, P> {
         let int = u32::from(int);
@@ -189,7 +187,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         loop {
             let firing: u32 = self.wait_for_any_interrupt()?.into();
             defmt::trace!("Got IRQ, {=u32:032b}", firing);
-            if firing & u32::from(int) != 0 {
+            if firing & int != 0 {
                 break Ok(());
             }
         }
@@ -198,9 +196,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         while self.irq.is_low().map_err(Error::GPIO)? {
             core::hint::spin_loop()
         }
-        registers::InterruptRegister::read(&mut self.dev)
-            .map(|r| r.val_0())
-            .map_err(Error::Interface)
+        self.get_interrupts()
     }
 
     /// Enables the oscillator and waits until it's stable
@@ -210,7 +206,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         if !op_ctr.en() {
             defmt::debug!("Enabling oscillator");
             // clear interrupts
-            let _ = registers::InterruptRegister::read(&mut self.dev).map_err(Error::Interface)?;
+            self.get_interrupts()?;
 
             let mut int = Interrupt::default();
             int.set_osc(true);
@@ -460,7 +456,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         irqs_enabled.set_cat(true);
         irqs_enabled.set_apon(true);
 
-        self.clear_interrupts()?;
+        self.get_interrupts()?;
         self.enable_interrupts(irqs_enabled)?;
         self.dev
             .direct_command(DirectCommand::InitialFieldOn)

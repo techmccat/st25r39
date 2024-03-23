@@ -97,7 +97,7 @@ impl<S: SpiDevice> Interface for SpiInterface<S> {
     }
 
     fn fifo_write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        assert!(buf.len() > 0 && buf.len() <= 512);
+        assert!(!buf.is_empty() && buf.len() <= 512);
         self.dev.transaction(&mut [
             SpiOperation::Write(&[spi_modes::FIFO_LOAD]),
             SpiOperation::Write(buf),
@@ -209,7 +209,7 @@ impl<I: I2c> Interface for I2CInterface<I> {
         )
     }
     fn fifo_write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        assert!(buf.len() > 0 && buf.len() <= 512);
+        assert!(!buf.is_empty() && buf.len() <= 512);
         self.0.transaction(
             Self::ADDR,
             &mut [

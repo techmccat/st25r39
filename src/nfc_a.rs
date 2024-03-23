@@ -1,6 +1,6 @@
 use core::{cmp::min, u8};
 
-use bilge::{arbitrary_int::{u2, u5}, bitsize};
+use bilge::arbitrary_int::u2;
 use embedded_hal::digital::InputPin;
 
 use crate::{
@@ -154,7 +154,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             TransceiveMode::Poller => (),
         }
 
-        self.0.clear_interrupts()?;
+        self.0.get_interrupts()?;
         self.0.enable_interrupts(irq)
     }
     // assumes relevant interrupts (eon, ppon2, nre)
@@ -191,7 +191,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
                 // rx reset, should go back to waiting for rxs
                 defmt::warn!("Not handling RX restart due to EMD");
                 if firing.nre() {
-                    return Err(Error::Timeout);
+                    return Err(Error::Timeout)
                 }
                 // check br detect register, timeout if nrt is on?
                 // check for rx activity
@@ -203,28 +203,26 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             } else if firing.wu_f() && !firing.eof() {
                 // SENSF_REQ automatic response (what?), keep waiting
                 // TODO: separate error checking function maybe
-            } else if firing.err_framing_hard() {
-                return Err(Error::Framing);
-            // TODO: discard soft framing errors in ap2p and ce
-            } else if firing.err_framing_soft() {
-                return Err(Error::Framing);
+            } else if firing.err_framing_hard() || firing.err_framing_soft() {
+                // TODO: discard soft framing errors in ap2p and ce
+                return Err(Error::Framing)
             } else if firing.err_parity() {
-                return Err(Error::Parity);
+                return Err(Error::Parity)
             } else if firing.err_crc() {
-                return Err(Error::Crc);
+                return Err(Error::Crc)
             } else if firing.col() {
                 return Err(Error::CollisionDetected);
             // should only be in passive listen
             } else if firing.eof() {
-                return Err(Error::LinkLost);
+                return Err(Error::LinkLost)
             } else if firing.nre() {
-                return Err(Error::Timeout);
+                return Err(Error::Timeout)
             } else if firing.rxe() {
                 let fs = registers::FifoStatus::read(&mut self.0.dev).map_err(Error::Interface)?;
                 if fs.bits().value() != 0 {
-                    return Err(Error::IncompleteByte);
+                    return Err(Error::IncompleteByte)
                 } else if fs.no_parity() {
-                    return Err(Error::Framing);
+                    return Err(Error::Framing)
                 }
                 let (len, _) = self.0.read_fifo(buf)?;
                 break Ok(len as usize);

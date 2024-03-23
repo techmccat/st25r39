@@ -196,9 +196,9 @@ pub(crate) fn try_greedy_step<I: Interface, P: InputPin>(
     settings: &TunerSettings,
     dir: Direction,
 ) -> crate::Result<bool, I, P> {
-    let (new_a, new_b) = step_values(&state, &settings, dir);
+    let (new_a, new_b) = step_values(state, settings, dir);
     let (amp, phase) = driver.set_capacitance_and_measure(new_a, new_b)?;
-    let diff = compute_diff(&settings, amp, phase);
+    let diff = compute_diff(settings, amp, phase);
     Ok(if diff < state.diff {
         defmt::debug!(
             "Kept dir: {}, a={=u8} b={=u8}, amp={=u8} phase={=u8}, diff={=u16}",
