@@ -6,7 +6,9 @@ use core::fmt::{Debug, Formatter};
 use defmt::Format;
 use embedded_hal::digital::InputPin;
 use interface::Interface;
-use registers::{operation_control::FieldDetectorControl, Interrupt, Register};
+use registers::{
+    operation_control::FieldDetectorControl, timer_emv_control::GptStart, Interrupt, Register,
+};
 
 pub type GPTDuration = fugit::Duration<u32, 59, 100_000_000>;
 
@@ -92,21 +94,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     /// Takes ownership of the interface and initializes the device
     pub fn init(dev: I, irq: P) -> Result<Self, I, P> {
         let mut drv = Self { dev, irq };
-        // set default state
-        drv.dev
-            .direct_command(DirectCommand::SetDefault)
-            .map_err(Error::Interface)?;
-        let mut io_cfg = registers::IoConfiguration::default();
-        // TODO: decouple this into the interface, we'll want I2C support in the future
-        // increase MISO driving level for higher SPI clock
-        io_cfg.set_io_drv_lvl(registers::io_configuration::IoDriverLevel::Increased);
-        // disable MISO pulldown
-        io_cfg.set_miso_pd1(true);
-        io_cfg.set_miso_pd2(true);
-        io_cfg.set_out_cl(registers::io_configuration::OutClk::Disabled);
-        io_cfg.write(&mut drv.dev).map_err(Error::Interface)?;
-        // let io_cfg = registers::IoConfiguration::read::<_, u16>(&mut drv.dev)?;
-        // defmt::debug!("IO Configuration: {}", io_cfg);
+        drv.dev.init_peripheral().map_err(Error::Interface)?;
 
         let identity: u8 = registers::IcIdentity::read(&mut drv.dev)
             .map_err(Error::Interface)?
@@ -170,14 +158,17 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
     }
 
     fn enable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
-        let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)
+        let mask: u32 = registers::InterruptMask::read(&mut self.dev)
             .map_err(Error::Interface)?
             .into();
-        mask &= !(u32::from(int));
-        registers::InterruptMask::from(mask)
-            .write(&mut self.dev)
-            .map_err(Error::Interface)?;
-        Ok(())
+        let new_mask = mask & !u32::from(int);
+        if mask != new_mask {
+            registers::InterruptMask::from(new_mask)
+                .write(&mut self.dev)
+                .map_err(Error::Interface)
+        } else {
+            Ok(())
+        }
     }
     fn disable_interrupts(&mut self, int: Interrupt) -> Result<(), I, P> {
         let mut mask: u32 = registers::InterruptMask::read(&mut self.dev)
@@ -438,7 +429,14 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             .map_err(Error::Interface)?;
 
         // 5ms guard time
-        self.set_guard_time(nfc_a::GUARD_TIME_US);
+        self.set_guard_time(nfc_a::GUARD_TIME_US)?;
+
+        // configure gpt as fdt
+        let gpt_ticks = nfc_a::FDT_POLL_POLLER - nfc_a::FDT_POLL_ADJUSTMENT;
+        self.set_gpt(gpt_ticks as u16)?;
+        registers::TimerEMVControl::modify(&mut self.dev, |r| r.set_gpt_start(GptStart::RxEnd))
+            .map_err(Error::Interface)?;
+
         Ok(nfc_a::Iso14443aInitiator(self))
     }
 
@@ -486,7 +484,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         })
         .map_err(Error::Interface)
     }
-    fn field_off(&mut self) -> Result<(), I, P> {
+    pub fn field_off(&mut self) -> Result<(), I, P> {
         registers::OperationControl::modify(&mut self.dev, |r| {
             r.set_tx_en(false);
             r.set_rx_en(false);

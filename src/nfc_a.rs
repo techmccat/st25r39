@@ -6,18 +6,18 @@ use embedded_hal::digital::InputPin;
 use crate::{
     commands::DirectCommand,
     interface::Interface,
-    registers::{self, timer_emv_control::GptStart, Interrupt, Register},
+    registers::{self, Interrupt, Register},
     Error, Result,
 };
 
-const MINIMUM_FDT_NFCA: u32 = 1620;
-const FWT_ADJUSTMENT: u32 = 64;
-const FWT_ADJUSTMENT_NFCA: u32 = 64 + 512;
-const FDT_LISTEN_POLLER: u32 = 1172;
-const FDT_LISTEN_MRT_ADJUSTMENT: u32 = 64;
-const FDT_LISTEN_NFCA_ADJUSTMENT: u32 = 276 - 64;
-const FDT_POLL_POLLER: u32 = 6780;
-const FDT_POLL_ADJUSTMENT: u32 = 80;
+pub const MINIMUM_FDT_NFCA: u32 = 1620;
+pub const FWT_ADJUSTMENT: u32 = 64;
+pub const FWT_ADJUSTMENT_NFCA: u32 = 64 + 512;
+pub const FDT_LISTEN_FC: u32 = 1172;
+pub const FDT_LISTEN_MRT_ADJUSTMENT: u32 = 64;
+pub const FDT_LISTEN_NFCA_ADJUSTMENT: u32 = 276 - 64;
+pub const FDT_POLL_POLLER: u32 = 6780;
+pub const FDT_POLL_ADJUSTMENT: u32 = 80;
 pub(crate) const GUARD_TIME_US: u32 = 5_000;
 
 pub enum ShortFrame {
@@ -45,27 +45,29 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         })
     }
     /// Timeout is in 1/fc
-    fn transceive_short_frame(
+    pub fn transceive_short_frame(
         &mut self,
         buf: &mut [u8],
         frame: ShortFrame,
         fwt: u32,
     ) -> Result<usize, I, P> {
-        // TODO: wait for frame delay timer
+        // wait for frame delay timer (using gpt)
+        if registers::BitrateDetection::read(&mut self.0.dev).map_err(Error::Interface)?.gpt_on() {
+            self.0.enable_interrupts(Interrupt::new_gpe())?;
+            self.0.wait_for_interrupt(Interrupt::new_gpe())?;
+        }
         let nrt_ticks = min(u16::MAX as u32, fwt + FWT_ADJUSTMENT + FWT_ADJUSTMENT_NFCA) / 64;
         self.0.set_nrt(nrt_ticks as u16)?;
 
         let mrt_ticks =
-            (FDT_LISTEN_POLLER - FDT_LISTEN_MRT_ADJUSTMENT - FDT_LISTEN_NFCA_ADJUSTMENT) / 64;
+            (FDT_LISTEN_FC - FDT_LISTEN_MRT_ADJUSTMENT - FDT_LISTEN_NFCA_ADJUSTMENT) / 64;
         self.0.set_mrt(mrt_ticks as u8)?;
 
-        // configure gpt as fdt
-        let gpt_ticks = FDT_POLL_POLLER - FDT_POLL_ADJUSTMENT;
-        self.0.set_gpt(gpt_ticks as u16)?;
-        registers::TimerEMVControl::modify(&mut self.0.dev, |r| r.set_gpt_start(GptStart::RxEnd))
-            .map_err(Error::Interface)?;
-
-        self.prepare_transceive()?;
+        self.prepare_transceive(TransceiveConfig {
+            // doesn't really need to be set for short frames or anticollision
+            no_rx_crc: true,
+            mode: TransceiveMode::Poller,
+        })?;
         let mut col = Interrupt::default();
         col.set_col(true);
         self.0.enable_interrupts(col)?;
@@ -103,9 +105,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         self.0.disable_interrupts(col)?;
         res
     }
-    // assumes field is on
-    // TODO: take config argument
-    fn prepare_transceive(&mut self) -> Result<(), I, P> {
+    fn prepare_transceive(&mut self, config: TransceiveConfig) -> Result<(), I, P> {
         // for now we assume initiator mode
         self.0
             .dev
@@ -115,13 +115,6 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             .dev
             .direct_command(DirectCommand::ResetRxGain)
             .map_err(Error::Interface)?;
-        // if in passive listen mode:
-        // self.0
-        //     .dev
-        //     .direct_command(DirectCommand::ClearFIFO)
-        //     .map_err(Error::Interface)?;
-
-        // TODO: config
 
         let mut irq = Interrupt::default();
         irq.set_wl(true);
@@ -134,26 +127,32 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         irq.set_err_framing_soft(true);
         irq.set_nre(true);
 
-        // if in passive mode:
-        // irq.set_eof(true);
-        // irq.set_wu_f(true);
-
-        // if in active mode
-        // irq.set_eon(true);
-        // irq.set_ppon2(true);
-        // irq.set_cat(true);
-        // irq.set_cac(true);
-
-        // TODO: config
-        // no crc rx
         registers::Auxiliary::modify(&mut self.0.dev, |r| {
-            r.set_no_crc_rx(true);
+            r.set_no_crc_rx(config.no_rx_crc);
             // if mode == active
             r.set_nfc_n(u2::new(0u8));
         })
         .map_err(Error::Interface)?;
-        // TODO: NRT EMV mode if er're in EMV eh mode
+        // TODO: NRT EMV mode if we're in EMV eh mode
         // TODO: sanity timer (no ehal-1 timer traits yet)
+
+        match config.mode {
+            TransceiveMode::Listener => {
+                self.0
+                    .dev
+                    .direct_command(DirectCommand::ClearFIFO)
+                    .map_err(Error::Interface)?;
+                irq.set_eof(true);
+                irq.set_wu_f(true);
+            }
+            TransceiveMode::ActiveP2P => {
+                irq.set_eon(true);
+                irq.set_ppon2(true);
+                irq.set_cat(true);
+                irq.set_cac(true);
+            }
+            TransceiveMode::Poller => (),
+        }
 
         self.0.clear_interrupts()?;
         self.0.enable_interrupts(irq)
@@ -232,4 +231,16 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransceiveMode {
+    Poller,
+    Listener,
+    ActiveP2P,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransceiveConfig {
+    pub no_rx_crc: bool,
+    pub mode: TransceiveMode,
 }

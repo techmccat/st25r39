@@ -1112,6 +1112,14 @@ pub struct Interrupt {
     pub ppon2: bool,
 }
 
+impl Interrupt {
+    pub fn new_gpe() -> Self {
+        let mut r = Self::default();
+        r.set_gpe(true);
+        r
+    }
+}
+
 register_impl!(FifoStatus, u16, 0x1E, A);
 #[bitsize(16)]
 #[derive(FromBits, DebugBits, Clone, Copy, Default, PartialEq, Eq)]
@@ -1189,6 +1197,18 @@ impl NumTxBytes {
 
         Self::new(lsb, msb, u3::new(bits as u8))
     }
+}
+
+register_impl!(BitrateDetection, u8, 0x24, A);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BitrateDetection {
+    pub mrt_on: bool,
+    pub nrt_on: bool,
+    pub gpt_on: bool,
+    pub ppt2_on: bool,
+    pub nfc_rate: bitrate_definition::Bitrate,
+    reserved: u2
 }
 
 register_impl!(RegulatorControl, u8, 0x2C, A);
