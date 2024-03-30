@@ -1,3 +1,4 @@
+use bilge::prelude::*;
 use bitvec::{order::Lsb0, view::AsMutBits};
 use defmt::Format;
 use embedded_hal::digital::InputPin;
@@ -9,7 +10,7 @@ use crate::{
     Error, Result,
 };
 
-/// Minimum PCD to PICC delay, in fc
+/// Minimum PCD to PICC delay, in 1/fc
 ///
 /// Per spec it's 1172, adding 3\*128 as margin
 pub const FDT_A_LISTEN_RELAXED: u32 = 1620;
@@ -49,6 +50,7 @@ pub struct AntiCollisionHeader {
     pub sel_cmd: CascadeLevel,
     pub bit_count: u8,
 }
+
 impl AntiCollisionHeader {
     pub fn new(sel_cmd: CascadeLevel, bit_count: u8) -> Self {
         Self { sel_cmd, bit_count }
@@ -62,6 +64,31 @@ impl AntiCollisionHeader {
     }
 }
 
+#[bitsize(8)]
+#[derive(DebugBits, Format, Clone, Copy, FromBits)]
+pub struct SelectResponse {
+    reserved: u2,
+    pub cascade: bool,
+    reserved: u2,
+    pub kind: TagKind,
+    reserved: u1,
+}
+
+#[bitsize(2)]
+#[derive(Debug, Format, Clone, Copy, FromBits)]
+pub enum TagKind {
+    Type2 = 0b00,
+    Type4A = 0b01,
+    NfcDep = 0b10,
+    NfcDepType4A = 0b11,
+}
+
+impl TagKind {
+    pub fn supports_rats(&self) -> bool {
+        *self as u8 & 1 == 1
+    }
+}
+
 #[derive(Debug)]
 pub struct Iso14443aInitiator<I, P>(pub(crate) crate::ST25R3916<I, P>);
 
@@ -71,12 +98,11 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         let res = self.transceive_short_frame(rx_buf, ShortFrame::ReqA, FDT_A_LISTEN_RELAXED);
         Ok(match res {
             Ok(_len) => true,
-            Err(Error::CollisionDetected) => true,
+            Err(Error::Collision) => true,
             Err(Error::Crc) => true,
             Err(Error::NoMemory) => true,
             Err(Error::Framing) => true,
             Err(Error::Parity) => true,
-            Err(Error::IncompleteByte) => true,
             Err(Error::Timeout) => false,
             Err(e) => return Err(e),
         })
@@ -324,18 +350,17 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
                 let total = header.bit_count as usize + bits;
                 Ok(total)
             }
-            Err(Error::CollisionDetected) => registers::CollisionDisplay::read(&mut self.0.dev)
+            Err(Error::Collision) => registers::CollisionDisplay::read(&mut self.0.dev)
                 .map_err(Error::Interface)
                 .map(|r| r.bits() as usize),
             Err(e) => Err(e),
         }?;
         {
-            let col_dis = registers::CollisionDisplay::read(&mut self.0.dev)
-                .map_err(Error::Interface)?;
-            defmt::warn!("{:08b}", col_dis);
+            let col_dis =
+                registers::CollisionDisplay::read(&mut self.0.dev).map_err(Error::Interface)?;
+            defmt::debug!("{:08b}", col_dis);
         }
 
-        // defmt::info!("{=[u8;5]:02x}", rx_buf);
         let net_bits = (header.bit_count - 16) as usize;
         let start_idx = net_bits / 8;
         let shamt = net_bits % 8;
@@ -356,12 +381,107 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
 
         Ok(bits)
     }
+    pub fn transceive_select(
+        &mut self,
+        sel_cmd: CascadeLevel,
+        id: [u8; 4],
+    ) -> Result<SelectResponse, I, P> {
+        let mut packet = [0u8; 7];
+        packet[0] = sel_cmd as u8;
+        packet[1] = 0x70;
+        packet[2..=5].copy_from_slice(&id);
+        let bcc = id[0] ^ id[1] ^ id[2] ^ id[3];
+        packet[6] = bcc;
+        let mut rx_buf = [0u8; 3];
+        let bit_count = self.transceive(
+            &packet,
+            packet.len() * 8,
+            true,
+            &mut rx_buf,
+            FDT_A_LISTEN_RELAXED,
+        )?;
+        // if i read the datasheet right the reader ic checks the crc so we don't need to
+        // check it
+        if bit_count.0 != 1 && bit_count.1 != 0 {
+            Err(Error::Framing)
+        } else {
+            Ok(SelectResponse::from(rx_buf[0]))
+        }
+    }
+    pub fn perform_anticollision(&mut self) -> Result<(NfcId, SelectResponse), I, P> {
+        let mut complete_id = heapless::Vec::<u8, 10>::new();
+        let mut final_data = None;
+
+        for cascade in [CascadeLevel::One, CascadeLevel::Two, CascadeLevel::Three] {
+            let mut bits = 16;
+            let mut id_buf = [0u8; 5];
+
+            loop {
+                bits = self.transceive_anticollision_frame(
+                    AntiCollisionHeader::new(cascade, bits),
+                    &mut id_buf,
+                    FDT_A_LISTEN_RELAXED,
+                )? as u8;
+                if bits == 56 { break }
+
+                let idx = bits / 8;
+                let sft = bits % 8;
+                // set the first bit with a collision to 1
+                id_buf[idx as usize] |= 1 << sft;
+            }
+            let id: [u8; 4] = id_buf[..4].try_into().unwrap();
+            defmt::debug!("Cascade level {}, got ID {=[u8]:02X}", cascade, id);
+
+            let sel_res = self.transceive_select(cascade, id)?;
+            if sel_res.cascade() {
+                // there should be no way for the id buffer to overlow but i'm keeping this just in
+                // case
+                complete_id
+                    .extend_from_slice(&id_buf[1..4])
+                    .map_err(|_| Error::IncorrectResponse)?;
+            } else {
+                complete_id
+                    .extend_from_slice(&id_buf[..4])
+                    .map_err(|_| Error::IncorrectResponse)?;
+                final_data = Some((cascade, sel_res));
+                break;
+            }
+        }
+
+        if let Some((cascade, res)) = final_data {
+            Ok((
+                match cascade {
+                    CascadeLevel::One => NfcId::Single(
+                        complete_id
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_| Error::IncorrectResponse)?,
+                    ),
+                    CascadeLevel::Two => NfcId::Double(
+                        complete_id
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_| Error::IncorrectResponse)?,
+                    ),
+                    CascadeLevel::Three => NfcId::Triple(
+                        complete_id
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_| Error::IncorrectResponse)?,
+                    ),
+                },
+                res,
+            ))
+        } else {
+            Err(Error::IncorrectResponse)
+        }
+    }
 }
 
 fn check_irq_err<I: Interface, P: InputPin>(firing: Interrupt) -> Result<(), I, P> {
     // defmt::info!("{=[u8;4]:08b}", u32::from(firing).to_le_bytes());
     if firing.col() {
-        Err(Error::CollisionDetected)
+        Err(Error::Collision)
     } else if firing.err_framing_hard() || firing.err_framing_soft() {
         // TODO: discard soft framing errors in ap2p and ce
         Err(Error::Framing)

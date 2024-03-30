@@ -27,15 +27,14 @@ pub use interface::SpiInterface;
 pub enum Error<I: Interface, P: InputPin> {
     Interface(I::Error),
     GPIO(P::Error),
-    ExternalField,
-    CollisionDetected,
+    Collision,
     Timeout,
     LinkLost,
     Framing,
     Parity,
     Crc,
-    IncompleteByte,
     NoMemory,
+    IncorrectResponse
 }
 
 impl<I: Interface, P: InputPin> Debug for Error<I, P>
@@ -47,15 +46,14 @@ where
         match self {
             Self::Interface(i) => f.debug_tuple("Interface").field(i).finish(),
             Self::GPIO(i) => f.debug_tuple("GPIO").field(i).finish(),
-            Self::ExternalField => f.write_str("ExternalField"),
-            Self::CollisionDetected => f.write_str("CollisionDetected"),
+            Self::Collision => f.write_str("Collision"),
             Self::Timeout => f.write_str("Timeout"),
             Self::LinkLost => f.write_str("LinkLost"),
             Self::Framing => f.write_str("Framing"),
             Self::Parity => f.write_str("Parity"),
             Self::Crc => f.write_str("Crc"),
-            Self::IncompleteByte => f.write_str("IncompleteByte"),
             Self::NoMemory => f.write_str("NoMemory"),
+            Self::IncorrectResponse => f.write_str("IncorrectResponse"),
         }
     }
 }
@@ -65,15 +63,14 @@ impl<I: Interface, P: InputPin> Format for Error<I, P> {
         match self {
             Self::Interface(_) => defmt::write!(f, "Interface error"),
             Self::GPIO(_) => defmt::write!(f, "GPIO error"),
-            Self::ExternalField => defmt::write!(f, "ExternalField"),
-            Self::CollisionDetected => defmt::write!(f, "CollisionDetected"),
+            Self::Collision => defmt::write!(f, "Collision"),
             Self::Timeout => defmt::write!(f, "Timeout"),
             Self::LinkLost => defmt::write!(f, "LinkLost"),
             Self::Framing => defmt::write!(f, "Framing"),
             Self::Parity => defmt::write!(f, "Parity"),
             Self::Crc => defmt::write!(f, "Crc"),
-            Self::IncompleteByte => defmt::write!(f, "IncompleteByte"),
             Self::NoMemory => defmt::write!(f, "NoMemory"),
+            Self::IncorrectResponse => defmt::write!(f, "IncorrectResponse"),
         }
     }
 }
@@ -487,7 +484,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         let firing = self.wait_for_any_interrupt()?;
 
         if firing.cac() {
-            Err(Error::ExternalField)
+            Err(Error::Collision)
         } else if firing.apon() {
             let mut cat = Interrupt::default();
             cat.set_cat(true);

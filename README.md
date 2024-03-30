@@ -8,3 +8,5 @@ measure some stuff and perform automatic antenna tuning.
 ## Library TODOs
 
 Time types and conversions (timings are expressed as multiples of the 13.56MHz clock periods)
+
+Figure out why collision detection is not working

@@ -6,14 +6,18 @@ use stm32g4xx_hal as hal;
 
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use hal::{
+    delay::DelayFromCountDownTimer,
     prelude::*,
     pwr::PwrExt,
     rcc::{Config, SysClockSrc},
     spi,
     stm32::Peripherals,
-    time::{RateExtU32, ExtU32}, timer::Timer, delay::DelayFromCountDownTimer,
+    time::{ExtU32, RateExtU32},
+    timer::Timer,
 };
-use st25r39::{SpiInterface, ST25R3916};
+use st25r39::{
+    SpiInterface, ST25R3916,
+};
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -48,15 +52,18 @@ fn main() -> ! {
     let mut nfc_a = driver.into_iso14443a_initiator().unwrap();
     let mut rx_buf = [0u8; 2];
 
+    defmt::info!("Waiting for card");
     loop {
         let res = nfc_a.detect_presence(&mut rx_buf);
-        match res {
-            Ok(true) => {
-                defmt::warn!("Card detected, ATQA = {=[u8;2]:02X}", rx_buf);
+        if let Ok(true) = res {
+            defmt::warn!("Card detected, ATQA = {=[u8;2]:02X}", rx_buf);
+            match nfc_a.perform_anticollision() {
+                Ok((id, resp)) => {
+                    let kind = resp.kind();
+                    defmt::warn!("Initialized tag: {:02X}, {}", id, kind)
+                }
+                Err(e) => defmt::error!("{}", e),
             }
-            Ok(false) => defmt::info!("No card detected"),
-            Err(st25r39::Error::ExternalField) => defmt::warn!("External field detected"),
-            Err(_) => defmt::error!("Error detecting card"),
         }
         rx_buf.fill(0);
         delay.delay_ms(1000);

@@ -1203,7 +1203,7 @@ pub struct CollisionDisplay {
 
 impl CollisionDisplay {
     pub fn bits(&self) -> u8 {
-        defmt::warn!("CollisionDisplay {:08b}", self);
+        // defmt::debug!("CollisionDisplay {:08b}", self);
         self.bit().value() + self.byte().value() * 8
     }
 }
