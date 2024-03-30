@@ -11,6 +11,10 @@ embedded-hal = { version = "1.0.0", features = ["defmt-03"] }
 bilge = "0.2.0"
 fugit = "0.3.7"
 
+[dependencies.bitvec]
+version = "1.0.1"
+default-features = false
+
 # not sure i even need this
 # [workspace]
 # resolver = "2"

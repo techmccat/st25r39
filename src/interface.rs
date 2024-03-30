@@ -105,7 +105,10 @@ impl<S: SpiDevice> Interface for SpiInterface<S> {
     }
 
     fn fifo_read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.dev.transfer(buf, &[spi_modes::FIFO_READ])
+        self.dev.transaction(&mut [
+            SpiOperation::Write(&[spi_modes::FIFO_READ]),
+            SpiOperation::Read(buf),
+        ])
     }
 
     fn direct_command(&mut self, cmd: DirectCommand) -> Result<(), Self::Error> {

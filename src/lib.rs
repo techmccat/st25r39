@@ -2,7 +2,10 @@
 
 use bilge::arbitrary_int::u4;
 use commands::DirectCommand;
-use core::fmt::{Debug, Formatter};
+use core::{
+    cmp::min,
+    fmt::{Debug, Formatter},
+};
 use defmt::Format;
 use embedded_hal::digital::InputPin;
 use interface::Interface;
@@ -94,7 +97,11 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
 
     /// Takes ownership of the interface and initializes the device
     pub fn init(dev: I, irq: P) -> Result<Self, I, P> {
-        let mut drv = Self { dev, irq, mask: u32::MAX };
+        let mut drv = Self {
+            dev,
+            irq,
+            mask: u32::MAX,
+        };
         drv.dev.init_peripheral().map_err(Error::Interface)?;
 
         let identity: u8 = registers::IcIdentity::read(&mut drv.dev)
@@ -263,8 +270,23 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             .map_err(Error::Interface)
     }
 
-    fn set_nrt(&mut self, ticks: u16) -> Result<(), I, P> {
-        registers::NRTimer::from_ticks(ticks)
+    /// Wait for GPT expire only if it's already running
+    fn wait_for_gpt(&mut self) -> Result<(), I, P> {
+        if registers::BitrateDetection::read(&mut self.dev)
+            .map_err(Error::Interface)?
+            .gpt_on()
+        {
+            self.enable_interrupts(Interrupt::new_gpe())?;
+            self.wait_for_interrupt(Interrupt::new_gpe())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Assumes steps of 64/fc
+    fn set_nrt(&mut self, fc: u32) -> Result<(), I, P> {
+        let ticks = min(u16::MAX as u32, fc / 64);
+        registers::NRTimer::from_ticks(ticks as u16)
             .write(&mut self.dev)
             .map_err(Error::Interface)
     }
@@ -277,6 +299,7 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             .map_err(Error::Interface)
     }
 
+    #[allow(unused)] // TODO: maybe figure out squelch
     fn set_mrt(&mut self, ticks: u8) -> Result<(), I, P> {
         registers::MRTimer::new(ticks)
             .write(&mut self.dev)
@@ -428,14 +451,14 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
         self.set_guard_time(nfc_a::GUARD_TIME_US)?;
 
         // configure gpt as fdt_poll
-        let gpt_ticks = nfc_a::FDT_A_POLL as i32 + nfc_a::FDT_A_ADJUSTMENT;
+        let gpt_ticks = (nfc_a::FDT_A_POLL as i32 + nfc_a::FDT_A_ADJUSTMENT) / 8;
         self.set_gpt(gpt_ticks as u16)?;
         registers::TimerEMVControl::modify(&mut self.dev, |r| r.set_gpt_start(GptStart::RxEnd))
             .map_err(Error::Interface)?;
 
-        let mrt_ticks =
-            (nfc_a::FDT_A_LISTEN_MIN as i32 + nfc_a::MRT_ADJUSTMENT) / 64;
-        self.set_mrt(mrt_ticks as u8)?;
+        // todo: maybe check out squelch and mrt
+        // let mrt_ticks = (nfc_a::FDT_A_LISTEN_MIN as i32 + nfc_a::MRT_ADJUSTMENT) / 64;
+        // self.set_mrt(mrt_ticks as u8)?;
 
         Ok(nfc_a::Iso14443aInitiator(self))
     }
@@ -496,6 +519,20 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             .write(&mut self.dev)
             .map_err(Error::Interface)
     }
+    fn clear_fifo(&mut self) -> Result<(), I, P> {
+        self.dev
+            .direct_command(DirectCommand::ClearFIFO)
+            .map_err(Error::Interface)
+    }
+    fn load_fifo(&mut self, tx: &[u8], bits: usize) -> Result<(), I, P> {
+        let bytes = bits / 8;
+        let sub_bits = bits % 8;
+        assert!(tx.len() == bytes + if sub_bits > 0 { 1 } else { 0 });
+
+        self.clear_fifo()?;
+        self.dev.fifo_write(tx).map_err(Error::Interface)?;
+        self.set_tx_bits(bits as u16)
+    }
     fn read_fifo(&mut self, buf: &mut [u8]) -> Result<(u16, u8), I, P> {
         let fifo_status = registers::FifoStatus::read(&mut self.dev).map_err(Error::Interface)?;
         let (bytes, bits) = fifo_status.capacity();
@@ -509,6 +546,11 @@ impl<I: Interface, P: InputPin> ST25R3916<I, P> {
             .map_err(Error::Interface)?;
 
         Ok((bytes, bits))
+    }
+    fn stop_activities(&mut self) -> Result<(), I, P> {
+        self.dev
+            .direct_command(DirectCommand::Stop)
+            .map_err(Error::Interface)
     }
 }
 

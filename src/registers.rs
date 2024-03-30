@@ -1118,6 +1118,16 @@ impl Interrupt {
         r.set_gpe(true);
         r
     }
+    pub fn new_txe() -> Self {
+        let mut r = Self::default();
+        r.set_txe(true);
+        r
+    }
+    pub fn new_rxe() -> Self {
+        let mut r = Self::default();
+        r.set_rxe(true);
+        r
+    }
 }
 
 register_impl!(FifoStatus, u16, 0x1E, A);
@@ -1179,23 +1189,42 @@ pub mod regulator_control {
     }
 }
 
+register_impl!(CollisionDisplay, u8, 0x20, A);
+#[bitsize(8)]
+#[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CollisionDisplay {
+    /// collision in parity bit
+    ///
+    /// not valid in case of hard framing errors
+    pub c_pb: bool,
+    pub bit: u3,
+    pub byte: u4,
+}
+
+impl CollisionDisplay {
+    pub fn bits(&self) -> u8 {
+        defmt::warn!("CollisionDisplay {:08b}", self);
+        self.bit().value() + self.byte().value() * 8
+    }
+}
+
 register_impl!(NumTxBytes, u16, 0x22, A);
 #[bitsize(16)]
 #[derive(FromBits, DebugBits, Format, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NumTxBytes {
-    pub lsb: u8,
-    pub msb: u5,
+    pub msb: u8,
     pub bits: u3,
+    pub lsb: u5,
 }
 
 impl NumTxBytes {
     pub fn from_bits(bits: u16) -> Self {
         let bytes = bits / 8;
-        let bits = bits % 8;
-        let lsb = (bytes & 0xFF) as u8;
-        let msb = u5::new((bytes >> 8) as u8 & 0x1F);
+        let bits = u3::new((bits % 8) as u8);
+        let lsb = u5::new((bytes & 0x1F) as u8);
+        let msb = (bytes >> 5) as u8;
 
-        Self::new(lsb, msb, u3::new(bits as u8))
+        Self::new(msb, bits, lsb)
     }
 }
 
