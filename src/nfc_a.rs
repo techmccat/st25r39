@@ -24,6 +24,9 @@ pub const MRT_ADJUSTMENT: i32 = -256;
 
 pub const GUARD_TIME_US: u32 = 5_000;
 
+pub const MAX_ATS_LEN: usize = 20;
+pub const MAX_HISTORICAL_BYTES: usize = MAX_ATS_LEN - 5;
+
 pub enum ShortFrame {
     /// SENS_REQ for NFC Forum
     ReqA,
@@ -86,6 +89,141 @@ pub enum TagKind {
 impl TagKind {
     pub fn supports_rats(&self) -> bool {
         *self as u8 & 1 == 1
+    }
+}
+
+#[derive(Debug, Format, Clone)]
+pub struct AnswerToSelect {
+    tl: u8,
+    format: T0,
+    ta_1: Option<TA1>,
+    tb_1: Option<TB1>,
+    tc_1: Option<TC1>,
+    historical_bytes: heapless::Vec<u8, MAX_HISTORICAL_BYTES>,
+}
+
+#[derive(Clone, Copy, Debug, Format)]
+pub enum ParseError {
+    InvalidLength,
+    InvalidData,
+}
+
+impl TryFrom<&[u8]> for AnswerToSelect {
+    type Error = ParseError;
+    fn try_from(value: &[u8]) -> core::prelude::v1::Result<Self, Self::Error> {
+        let mut bytes = value.into_iter().cloned();
+        if let Some(tl) = bytes.next() {
+            if tl as usize != value.len() || tl < 2 {
+                return Err(ParseError::InvalidLength);
+            };
+            let t0 = T0::from(bytes.next().unwrap());
+            let mut ret = AnswerToSelect {
+                tl,
+                format: t0,
+                ta_1: None,
+                tb_1: None,
+                tc_1: None,
+                historical_bytes: heapless::Vec::new(),
+            };
+
+            if t0.ta_transmitted() {
+                ret.ta_1 = Some(
+                    bytes
+                        .next()
+                        .map(|b| TA1::from(b))
+                        .ok_or(ParseError::InvalidData)?,
+                );
+            }
+            if t0.tb_transmitted() {
+                ret.tb_1 = Some(
+                    bytes
+                        .next()
+                        .map(|b| TB1::from(b))
+                        .ok_or(ParseError::InvalidData)?,
+                );
+            }
+            if t0.tc_transmitted() {
+                ret.tc_1 = Some(
+                    bytes
+                        .next()
+                        .map(|b| TC1::from(b))
+                        .ok_or(ParseError::InvalidData)?,
+                );
+            }
+            ret.historical_bytes.extend(bytes);
+
+            Ok(ret)
+        } else {
+            Err(ParseError::InvalidLength)
+        }
+    }
+}
+
+#[bitsize(8)]
+#[derive(DebugBits, Clone, Copy, FromBits)]
+pub struct T0 {
+    pub fsci: u4,
+    pub ta_transmitted: bool,
+    pub tb_transmitted: bool,
+    pub tc_transmitted: bool,
+    reserved: u1,
+}
+
+impl Format for T0 {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "T0 {{ FSCI: {0=0..4}, TA(1) transmitted: {0=4..5}, TB(1) transmitted: {0=5..6}, TC(1) transmitted: {0=6..7} }}", u8::from(*self))
+    }
+}
+
+#[bitsize(8)]
+#[derive(DebugBits, Clone, Copy, FromBits)]
+pub struct TA1 {
+    pub d_poll_listen_2_support: bool,
+    pub d_poll_listen_4_support: bool,
+    pub d_poll_listen_8_support: bool,
+    reserved: u1,
+    pub d_listen_poll_2_support: bool,
+    pub d_listen_poll_4_support: bool,
+    pub d_listen_poll_8_support: bool,
+    pub symmetric_bitrate_only: bool,
+}
+
+impl Format for TA1 {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "TA(1) {{ Poll->Listen: {0=0..3:03b}, Listen->Poll: {0=4..7:03b}, Symmetric bitrate: {0=7..8} }}", u8::from(*self))
+    }
+}
+
+#[bitsize(8)]
+#[derive(DebugBits, Clone, Copy, FromBits)]
+pub struct TB1 {
+    pub sfgi: u4,
+    pub fwi: u4,
+}
+
+impl Format for TB1 {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(
+            fmt,
+            "TB(1) {{ SFGI: {0=0..4}, FWI: {0=4..8} }}",
+            u8::from(*self)
+        )
+    }
+}
+
+#[bitsize(8)]
+#[derive(DebugBits, Clone, Copy, FromBits)]
+pub struct TC1 {
+    nad_supported: bool,
+    did_supported: bool,
+    reserved: u2,
+    advanced_features_supported: bool,
+    reserved: u3,
+}
+
+impl Format for TC1 {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "TC(1) {{ NAD supported: {0=0..1}, DID supported: {0=1..2}, Advanced feature support: {0=4..5} }}", u8::from(*self))
     }
 }
 
@@ -308,6 +446,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         buf: &mut [u8; 5],
         fdt_listen: u32,
     ) -> Result<usize, I, P> {
+        // defmt::debug!("{}", header);
         assert!(header.bit_count >= 16 && header.bit_count <= 48);
         self.0.wait_for_gpt()?;
         self.0.set_nrt(fdt_listen + FDT_A_ADJUSTMENT as u32)?;
@@ -355,11 +494,9 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
                 .map(|r| r.bits() as usize),
             Err(e) => Err(e),
         }?;
-        {
-            let col_dis =
-                registers::CollisionDisplay::read(&mut self.0.dev).map_err(Error::Interface)?;
-            defmt::debug!("{:08b}", col_dis);
-        }
+        // let col_dis =
+        //     registers::CollisionDisplay::read(&mut self.0.dev).map_err(Error::Interface)?;
+        // defmt::debug!("{:08b}", col_dis);
 
         let net_bits = (header.bit_count - 16) as usize;
         let start_idx = net_bits / 8;
@@ -381,6 +518,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
 
         Ok(bits)
     }
+
     pub fn transceive_select(
         &mut self,
         sel_cmd: CascadeLevel,
@@ -408,6 +546,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             Ok(SelectResponse::from(rx_buf[0]))
         }
     }
+
     pub fn perform_anticollision(&mut self) -> Result<(NfcId, SelectResponse), I, P> {
         let mut complete_id = heapless::Vec::<u8, 10>::new();
         let mut final_data = None;
@@ -422,7 +561,9 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
                     &mut id_buf,
                     FDT_A_LISTEN_RELAXED,
                 )? as u8;
-                if bits == 56 { break }
+                if bits == 56 {
+                    break;
+                }
 
                 let idx = bits / 8;
                 let sft = bits % 8;
@@ -474,6 +615,35 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
             ))
         } else {
             Err(Error::IncorrectResponse)
+        }
+    }
+
+    pub fn transmit_sleep(&mut self) -> Result<(), I, P> {
+        self.transmit(&[0x50, 0], 16, true)
+    }
+
+    pub fn transceive_rats(&mut self) -> Result<AnswerToSelect, I, P> {
+        let fsdi = 0x8;
+        // todo: maybe support cid?
+        let param = fsdi << 4;
+        let frame = [0xe0, param];
+
+        let mut rx_buf = [0; MAX_ATS_LEN + 2];
+        let len = match self.transceive(&frame, 16, true, &mut rx_buf, u16::MAX as u32) {
+            Ok((bytes, bits)) => {
+                if bits == 0 && bytes - 2 > 2 && bytes - 2 < MAX_ATS_LEN as u16 {
+                    Ok(bytes as usize - 2)
+                } else {
+                    Err(Error::Framing)
+                }
+            }
+            Err(Error::NoMemory) => Err(Error::Framing),
+            Err(e) => Err(e),
+        }?;
+
+        match AnswerToSelect::try_from(&rx_buf[..len]) {
+            Ok(ats) => Ok(ats),
+            Err(_) => Err(Error::IncorrectResponse),
         }
     }
 }

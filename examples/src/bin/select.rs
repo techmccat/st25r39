@@ -60,7 +60,16 @@ fn main() -> ! {
             match nfc_a.perform_anticollision() {
                 Ok((id, resp)) => {
                     let kind = resp.kind();
-                    defmt::warn!("Initialized tag: {:02X}, {}", id, kind)
+                    defmt::warn!("Initialized tag: {:02X}, {}", id, kind);
+
+                    if kind.supports_rats() {
+                        match nfc_a.transceive_rats() {
+                            Ok(ats) => defmt::warn!("Got {:X}", ats),
+                            Err(e) => defmt::error!("{}", e),
+                        }
+                    }
+                    defmt::info!("Putting tag to sleep");
+                    nfc_a.transmit_sleep().ok();
                 }
                 Err(e) => defmt::error!("{}", e),
             }
