@@ -18,8 +18,10 @@ pub type GPTDuration = fugit::Duration<u32, 59, 100_000_000>;
 pub mod aat;
 pub mod commands;
 pub mod interface;
-pub mod nfc_a;
 pub mod registers;
+
+pub mod nfc_a;
+pub mod mifare_classic;
 
 pub use interface::SpiInterface;
 

@@ -16,7 +16,7 @@ use hal::{
     timer::Timer,
 };
 use st25r39::{
-    SpiInterface, ST25R3916,
+    mifare_classic, SpiInterface, ST25R3916
 };
 
 #[cortex_m_rt::entry]
@@ -50,13 +50,13 @@ fn main() -> ! {
     let _ = driver.adjust_regulators().unwrap();
 
     let mut nfc_a = driver.into_iso14443a_initiator().unwrap();
-    let mut rx_buf = [0u8; 2];
+    let mut atqa_buf = [0u8; 2];
 
     defmt::info!("Waiting for card");
     loop {
-        let res = nfc_a.detect_presence(&mut rx_buf);
+        let res = nfc_a.detect_presence(&mut atqa_buf);
         if let Ok(true) = res {
-            defmt::warn!("Card detected, ATQA = {=[u8;2]:02X}", rx_buf);
+            defmt::warn!("Card detected, ATQA = {=[u8;2]:02X}", atqa_buf);
             match nfc_a.perform_anticollision() {
                 Ok((id, resp)) => {
                     let kind = resp.kind();
@@ -67,6 +67,15 @@ fn main() -> ! {
                             Ok(ats) => defmt::warn!("Got {:X}", ats),
                             Err(e) => defmt::error!("{}", e),
                         }
+                    } else if atqa_buf == [04, 00] {
+                        match u8::from(resp) {
+                            08 | 09 => {
+                                defmt::warn!("Trying to query potential Mifare Classic tag");
+                                let mut mfc = mifare_classic::MfClassicPoller::new(&mut nfc_a);
+                                defmt::warn!("Got {}", mfc.detect());
+                            }
+                            _ => ()
+                        }
                     }
                     defmt::info!("Putting tag to sleep");
                     nfc_a.transmit_sleep().ok();
@@ -74,7 +83,7 @@ fn main() -> ! {
                 Err(e) => defmt::error!("{}", e),
             }
         }
-        rx_buf.fill(0);
+        atqa_buf.fill(0);
         delay.delay_ms(1000);
     }
 }

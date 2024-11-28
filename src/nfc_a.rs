@@ -15,6 +15,8 @@ use crate::{
 /// Per spec it's 1172, adding 3\*128 as margin
 pub const FDT_A_LISTEN_RELAXED: u32 = 1620;
 pub const FDT_A_LISTEN_MIN: u32 = 1172;
+pub const FDT_LISTEN_ATS: u32 = 40000;
+
 /// Minimum PCD to PICC delay, in fc
 pub const FDT_A_POLL: u32 = 6780;
 
@@ -257,11 +259,14 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         self.0.stop_activities()?;
         self.0.set_nrt(fdt_listen + FDT_A_ADJUSTMENT as u32)?;
 
-        self.prepare_transceive(TransceiveConfig {
-            // not really needed since it's set automatically for short frames or anticollision
-            no_rx_crc: true,
-            mode: TransceiveMode::Poller,
-        })?;
+        self.prepare_transceive(
+            TransceiveConfig {
+                // not really needed since it's set automatically for short frames or anticollision
+                no_rx_crc: true,
+                ..Default::default()
+            },
+            TransceiveMode::Poller,
+        )?;
 
         self.0.set_tx_bits(0)?;
 
@@ -298,36 +303,42 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         &mut self,
         tx: &[u8],
         bits: usize,
-        append_crc: bool,
+        config: TransceiveConfig,
         rx: &mut [u8],
         fdt_listen: u32,
     ) -> Result<(u16, u8), I, P> {
         self.0.set_nrt(fdt_listen + FDT_A_ADJUSTMENT as u32)?;
-        self.transmit(tx, bits, append_crc)?;
+        self.transmit(tx, bits, config)?;
         self.0.wait_for_interrupt(Interrupt::new_txe())?;
         self.receive_data(rx)
     }
 
     /// Transmits data
-    pub fn transmit(&mut self, tx: &[u8], bits: usize, append_crc: bool) -> Result<(), I, P> {
+    pub fn transmit(
+        &mut self,
+        tx: &[u8],
+        bits: usize,
+        config: TransceiveConfig,
+    ) -> Result<(), I, P> {
         self.0.wait_for_gpt()?;
-        self.prepare_transceive(TransceiveConfig {
-            no_rx_crc: false,
-            mode: TransceiveMode::Poller,
-        })?;
+        self.prepare_transceive(config, TransceiveMode::Poller)?;
 
         self.0.load_fifo(tx, bits)?;
         self.0
             .dev
-            .direct_command(if append_crc {
-                DirectCommand::TransmitWithCRC
-            } else {
+            .direct_command(if config.no_append_crc {
                 DirectCommand::TransmitWithoutCRC
+            } else {
+                DirectCommand::TransmitWithCRC
             })
             .map_err(Error::Interface)
     }
 
-    fn prepare_transceive(&mut self, config: TransceiveConfig) -> Result<(), I, P> {
+    fn prepare_transceive(
+        &mut self,
+        config: TransceiveConfig,
+        mode: TransceiveMode,
+    ) -> Result<(), I, P> {
         // for now we assume initiator mode
         self.0
             .dev
@@ -359,7 +370,13 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         // TODO: NRT EMV mode if we're in EMV eh mode
         // TODO: sanity timer (no ehal-1 timer traits yet)
 
-        match config.mode {
+        registers::Iso14443ASettings::modify(&mut self.0.dev, |r| {
+            r.set_no_rx_parity(config.no_rx_parity);
+            r.set_no_tx_parity(config.no_tx_parity);
+        })
+        .map_err(Error::Interface)?;
+
+        match mode {
             TransceiveMode::Listener => {
                 self.0.clear_fifo()?;
                 irq.set_eof(true);
@@ -371,7 +388,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
                 irq.set_cat(true);
                 irq.set_cac(true);
             }
-            TransceiveMode::Poller => (),
+            TransceiveMode::Poller => {}
         }
 
         self.0.get_interrupts()?;
@@ -453,10 +470,13 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
 
         // stmicro driver disable agc for better collision detection if receiver correlator is
         // disabled, but in the st25r3916b it's always enabled
-        self.prepare_transceive(TransceiveConfig {
-            no_rx_crc: true,
-            mode: TransceiveMode::Poller,
-        })?;
+        self.prepare_transceive(
+            TransceiveConfig {
+                no_rx_crc: true,
+                ..Default::default()
+            },
+            TransceiveMode::Poller,
+        )?;
         self.0.clear_fifo()?;
         self.0
             .dev
@@ -534,7 +554,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         let bit_count = self.transceive(
             &packet,
             packet.len() * 8,
-            true,
+            Default::default(),
             &mut rx_buf,
             FDT_A_LISTEN_RELAXED,
         )?;
@@ -619,7 +639,7 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
     }
 
     pub fn transmit_sleep(&mut self) -> Result<(), I, P> {
-        self.transmit(&[0x50, 0], 16, true)
+        self.transmit(&[0x50, 0], 16, Default::default())
     }
 
     pub fn transceive_rats(&mut self) -> Result<AnswerToSelect, I, P> {
@@ -629,7 +649,11 @@ impl<I: Interface, P: InputPin> Iso14443aInitiator<I, P> {
         let frame = [0xe0, param];
 
         let mut rx_buf = [0; MAX_ATS_LEN + 2];
-        let len = match self.transceive(&frame, 16, true, &mut rx_buf, u16::MAX as u32) {
+        let config = TransceiveConfig {
+            no_rx_crc: true,
+            ..Default::default()
+        };
+        let len = match self.transceive(&frame, 16, config, &mut rx_buf, FDT_LISTEN_ATS) {
             Ok((bytes, bits)) => {
                 if bits == 0 && bytes - 2 > 2 && bytes - 2 < MAX_ATS_LEN as u16 {
                     Ok(bytes as usize - 2)
@@ -675,8 +699,29 @@ pub enum TransceiveMode {
     Listener,
     ActiveP2P,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransceiveConfig {
+    /// Don't append CRC before transmitting
+    ///
+    /// Appending CRC will automatically enable RX CRC check
+    pub no_append_crc: bool,
+    /// Do not check for RX CRC
     pub no_rx_crc: bool,
-    pub mode: TransceiveMode,
+    /// Do not omit RX parity
+    pub no_rx_parity: bool,
+    /// Do not automatically compute TX parity
+    pub no_tx_parity: bool,
+}
+
+pub fn compute_crc(data: &[u8]) -> u16 {
+    // const POLY: u16 = 0x4808;
+    const INITIAL: u16 = 0x6363;
+
+    data.into_iter().fold(INITIAL, |crc, data| {
+        let data = *data & crc as u8;
+        let data = (data ^ data << 4) as u16;
+
+        (crc >> 8) ^ (data << 8) ^ (data << 3) ^ (data >> 4)
+    })
 }
