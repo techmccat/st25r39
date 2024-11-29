@@ -34,11 +34,10 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
 
     /// Tries detecting a card by authenticating to sector 0
     pub fn detect(&mut self) -> Result<bool, I, P> {
-        let auth_command = [Command::AuthKeyA as u8, 0x30, 0x76, 0x4a];
-        todo!("Fix your fucking crc");
-        // let crc = compute_crc(&auth_command[0..2]);
-        // auth_command[2] = crc as u8;
-        // auth_command[3] = (crc >> 8) as u8;
+        let mut auth_command = [Command::AuthKeyA as u8, 0x00, 0x00, 0x00];
+        let crc = compute_crc(&auth_command[0..2]);
+        auth_command[2] = crc as u8;
+        auth_command[3] = (crc >> 8) as u8;
         defmt::info!("Sending command {=[u8]}", auth_command);
 
         let mut rx = [0u8; 4];

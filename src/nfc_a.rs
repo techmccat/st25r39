@@ -719,7 +719,7 @@ pub fn compute_crc(data: &[u8]) -> u16 {
     const INITIAL: u16 = 0x6363;
 
     data.into_iter().fold(INITIAL, |crc, data| {
-        let data = *data & crc as u8;
+        let data = *data ^ crc as u8;
         let data = (data ^ data << 4) as u16;
 
         (crc >> 8) ^ (data << 8) ^ (data << 3) ^ (data >> 4)
