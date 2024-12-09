@@ -36,7 +36,8 @@ pub enum Error<I: Interface, P: InputPin> {
     Parity,
     Crc,
     NoMemory,
-    IncorrectResponse
+    IncorrectResponse,
+    Authentication,
 }
 
 impl<I: Interface, P: InputPin> Debug for Error<I, P>
@@ -56,6 +57,7 @@ where
             Self::Crc => f.write_str("Crc"),
             Self::NoMemory => f.write_str("NoMemory"),
             Self::IncorrectResponse => f.write_str("IncorrectResponse"),
+            Self::Authentication => f.write_str("Authentication"),
         }
     }
 }
@@ -73,6 +75,7 @@ impl<I: Interface, P: InputPin> Format for Error<I, P> {
             Self::Crc => defmt::write!(f, "Crc"),
             Self::NoMemory => defmt::write!(f, "NoMemory"),
             Self::IncorrectResponse => defmt::write!(f, "IncorrectResponse"),
+            Self::Authentication => defmt::write!(f, "Authentication "),
         }
     }
 }

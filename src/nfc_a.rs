@@ -708,7 +708,7 @@ pub struct TransceiveConfig {
     pub no_append_crc: bool,
     /// Do not check for RX CRC
     pub no_rx_crc: bool,
-    /// Do not omit RX parity
+    /// Do not omit or check RX parity
     pub no_rx_parity: bool,
     /// Do not automatically compute TX parity
     pub no_tx_parity: bool,
@@ -724,4 +724,20 @@ pub fn compute_crc(data: &[u8]) -> u16 {
 
         (crc >> 8) ^ (data << 8) ^ (data << 3) ^ (data >> 4)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_crc;
+
+    #[test]
+    fn crc_test() {
+        let test_data_a = [0x60, 0x30];
+        let crc_a = compute_crc(&test_data_a);
+        assert_eq!(crc_a.to_le_bytes(), [0x76, 0x4A]);
+
+        let test_data_b = [0x60, 0x04];
+        let crc_b = compute_crc(&test_data_b);
+        assert_eq!(crc_b.to_le_bytes(), [0xD1, 0x3D]);
+    }
 }

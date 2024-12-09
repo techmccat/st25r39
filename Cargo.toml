@@ -21,3 +21,6 @@ default-features = false
 # resolver = "2"
 # members = [ "." ]
 # exclude = [ "examples" ]
+
+[dev-dependencies]
+rand = { version = "0.8", features = ["small_rng"] }
