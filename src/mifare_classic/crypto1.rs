@@ -46,12 +46,13 @@ impl Crypto1 {
     /// Initializes the stream from a 48 bit key
     pub fn init(MfClassicKey{key, ..}: MfClassicKey) -> Self {
         let mut ret = Self::default();
-        for bit in (0u8..=47).rev().step_by(2) {
+        for bit in (0..=47).rev().step_by(2) {
             ret.odd <<= 1;
-            ret.odd |= key.get_bit::<Lsb0>(BitIdx::new((bit - 1) ^ 0b111).unwrap()) as u32;
+            // can't do get_bit on u64s because BitStore is for types that fit into a register
+            ret.odd |= key.as_bits::<Lsb0>()[(bit - 1) ^ 0b111] as u32;
 
             ret.even <<= 1;
-            ret.even |= key.get_bit::<Lsb0>(BitIdx::new(bit ^ 0b111).unwrap()) as u32;
+            ret.even |= key.as_bits::<Lsb0>()[bit ^ 0b111] as u32;
         }
 
         ret

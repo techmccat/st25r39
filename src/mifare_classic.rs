@@ -51,8 +51,23 @@ impl MfcKeyKind {
 
 #[derive(Debug, Clone, Copy, Format)]
 pub struct MfClassicKey {
-    key: u64,
-    kind: MfcKeyKind,
+    pub key: [u8; 6],
+    pub kind: MfcKeyKind,
+}
+
+impl MfClassicKey {
+    pub fn new(key: u64, kind: MfcKeyKind) -> Self {
+        Self {
+            key: key.to_be_bytes()[..6].try_into().unwrap(),
+            kind,
+        }
+    }
+    pub fn key_a(key: u64) -> Self {
+        Self::new(key, MfcKeyKind::KeyA)
+    }
+    pub fn key_b(key: u64) -> Self {
+        Self::new(key, MfcKeyKind::KeyB)
+    }
 }
 
 pub struct MfClassicPoller<'a, I, P> {
@@ -93,7 +108,7 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
         })
     }
     // TODO: maybe return a sector reader proxy or something
-    pub fn authenticate_sector(
+    pub fn authenticate_block(
         &mut self,
         sector: u8,
         key: MfClassicKey,
@@ -121,6 +136,7 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
             .encrypt_with_parity(&reader_answer.to_be_bytes(), &mut reply_bits[36..], None)
             .unwrap();
 
+        defmt::debug!("Sending NR, AR {=[u8; 9]:02X}", reply_enc);
         let mut tag_reply = [0u8; 5];
         let (bytes, bits) = self.drv.transceive(
             &reply_enc,
@@ -140,6 +156,7 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
         crypto1
             .decrypt_with_parity(tag_reply.view_bits(), &mut dec_tag_resp)
             .unwrap();
+        defmt::debug!("Got AT {=[u8;4]:02X}", dec_tag_resp);
 
         let ks3: [u8; 4] = core::array::from_fn(|_| crypto1.next_byte(0, false));
         let suc3_nt = crypto1::prng_successor(reader_answer, 32).to_be_bytes();
@@ -147,6 +164,7 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
         let expected: [u8; 4] = core::array::from_fn(|i| ks3[i] ^ suc3_nt[i]);
 
         if dec_tag_resp != expected {
+            defmt::info!("Expected {=[u8;4]:02X}", expected);
             // tag auth failed
             // or i screwed up something here
             Err(Error::Authentication)
@@ -162,7 +180,7 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
         let crc = compute_crc(&auth_command[0..2]);
         auth_command[2] = crc as u8;
         auth_command[3] = (crc >> 8) as u8;
-        defmt::debug!("Sending command {=[u8]}", auth_command);
+        defmt::debug!("Sending command {=[u8;4]:02X}", auth_command);
 
         let mut rx = [0u8; 4];
         let res = self.drv.transceive(
@@ -178,25 +196,43 @@ impl<'a, I: Interface, P: InputPin> MfClassicPoller<'a, I, P> {
         );
 
         match res {
-            Ok((4, 0)) => Ok(rx),
-            Ok((_, _)) | Err(Error::NoMemory)=> Err(Error::Framing),
+            Ok((4, 0)) => {
+                defmt::debug!("Got nonce {=[u8; 4]:02X}", rx);
+                Ok(rx)
+            }
+            Ok((_, _)) | Err(Error::NoMemory) => Err(Error::Framing),
             Err(e) => Err(e),
         }
     }
     /// Reads provided block after auth for sector has been done
-    pub fn read_block(&mut self, crypto: &mut Crypto1, block: u8, buf: &mut [u8; 16]) -> Result<(), I, P> {
+    pub fn read_block(
+        &mut self,
+        crypto: &mut Crypto1,
+        block: u8,
+        buf: &mut [u8; 16],
+    ) -> Result<(), I, P> {
         let cmd = [Command::ReadBlock as u8, block];
         let mut tx_buf = [0u8; 3];
-        let len_bits = crypto.encrypt_with_parity(&cmd, tx_buf.as_mut_bits(), None).unwrap();
+        let len_bits = crypto
+            .encrypt_with_parity(&cmd, tx_buf.as_mut_bits(), None)
+            .unwrap();
 
         const RX_LEN: usize = bytes_plus_parity(16);
         let mut rx_buf = [0u8; RX_LEN];
-        match self.drv.transceive(&tx_buf, len_bits, Self::ENC_TRX_CONFIG, &mut rx_buf, MF_CLASSIC_FWT) {
+        match self.drv.transceive(
+            &tx_buf,
+            len_bits,
+            Self::ENC_TRX_CONFIG,
+            &mut rx_buf,
+            MF_CLASSIC_FWT,
+        ) {
             Ok((bytes, 0)) if bytes == RX_LEN as u16 => Ok(()),
             Ok((_, _)) | Err(Error::NoMemory) => Err(Error::Framing),
             Err(e) => Err(e),
         }?;
-        crypto.decrypt_with_parity(rx_buf.as_mut_bits(), buf).unwrap();
+        crypto
+            .decrypt_with_parity(rx_buf.as_mut_bits(), buf)
+            .unwrap();
 
         Ok(())
     }

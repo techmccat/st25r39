@@ -11,9 +11,10 @@ embedded-hal 1.0 SPI and digital interfaces
 
 ## Examples
 
-### init.rs
+### select_nfca.rs
 
-Starts the ST25 oscillator, measures the voltage on the VDD rail and configures the regulator accordingly
+Starts the ST25 oscillator, measures the voltage on the VDD rail and configures the regulator accordingly,
+then polls for ISO 14443A tags and tries to initialize them
 
 ### tuning.rs
 
